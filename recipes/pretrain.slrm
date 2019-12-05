@@ -1,0 +1,9 @@
+#!/bin/bash
+#SBATCH --time=03-00
+#SBATCH --gres=gpu:v100:1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem-per-cpu=4G
+
+source activate lipreading
+
+python src/pretrain.py --resnet resnet18 --backend conv --learning_rate 1e-4 --weight_decay 1e-3 --batch_size 64 --data_root /scratch/elec/puhe/c/LRS3-TED/lipread_mp4/ --augment 1 --workers 16 --weight_hist 0 --max_epochs 100
