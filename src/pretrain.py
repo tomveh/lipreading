@@ -44,6 +44,10 @@ class LipreadingClassifier(pl.LightningModule):
             'learning_rate': self.trainer.optimizers[0].param_groups[0]['lr']
         }
 
+        print(
+            f'train | epoch: {self.current_epoch:03} | batch: {(self.global_step % len(self.train_dataloader())):09} | loss: {loss.item():.3f} | accuracy: {accuracy.item():.3f} | learning_rate: {self.trainer.optimizers[0].param_groups[0]["lr"]:.5f}'
+        )
+
         return {'loss': loss, 'log': log}
 
     def on_after_backward(self):
@@ -73,6 +77,10 @@ class LipreadingClassifier(pl.LightningModule):
 
         loss = F.cross_entropy(pred, y)
         accuracy = (pred.argmax(dim=1) == y).float().mean()
+
+        print(
+            f'valid | epoch: {self.current_epoch:03} | batch: {(self.global_step % len(self.train_dataloader())):09} | loss: {loss.item():.3f} | accuracy: {accuracy.item():.3f} | learning_rate: {self.trainer.optimizers[0].param_groups[0]["lr"]:.5f}'
+        )
 
         return {'val_loss': loss, 'val_acc': accuracy}
 
@@ -238,15 +246,15 @@ class LipreadingClassifier(pl.LightningModule):
 def main(hparams):
     module = LipreadingClassifier(hparams)
 
+    print(hparams)
+
     if hparams.checkpoint:
         print(f'loading from checkpoint {hparams.checkpoint}...')
         logger = TestTubeLogger(save_dir='lightning_logs',
                                 version=hparams.checkpoint)
         trainer = pl.Trainer(logger=logger)
     else:
-        trainer = pl.Trainer(train_percent_check=0.001,
-                             val_percent_check=0.1,
-                             show_progress_bar=True,
+        trainer = pl.Trainer(show_progress_bar=False,
                              gpus=1,
                              log_gpu_memory='all',
                              fast_dev_run=hparams.fast_dev_run,
