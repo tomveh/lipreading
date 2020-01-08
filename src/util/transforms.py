@@ -1,4 +1,5 @@
 import torch
+from .videotransforms import video_transforms
 
 
 class Normalize:
@@ -21,6 +22,30 @@ class RandomFrameDrop:
             return padded
 
         return t
+
+
+class CenterCrop():
+    def __init__(self, size):
+        self.t = video_transforms.CenterCrop(size)
+
+    def __call__(self, clip):
+        return self.t(clip)
+
+
+class RandomCrop():
+    def __init__(self, size):
+        self.t = video_transforms.RandomCrop(size)
+
+    def __call__(self, clip):
+        return self.t(clip)
+
+
+class RandomHorizontalFlip():
+    def __init__(self):
+        self.t = video_transforms.RandomHorizontalFlip()
+
+    def __call__(self, clip):
+        return self.t(clip)
 
 
 class Map:

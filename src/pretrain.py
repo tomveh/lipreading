@@ -13,8 +13,7 @@ import torchvision.transforms as transforms
 
 from models.models import LipreadingResNet
 from util.data import LRW1Dataset
-from util.transforms import Map, Normalize, RandomFrameDrop
-import util.videotransforms.video_transforms as video_transforms
+import util.transforms as t
 
 
 class LipreadingClassifier(pl.LightningModule):
@@ -127,30 +126,30 @@ class LipreadingClassifier(pl.LightningModule):
     def train_transform(self):
         return transforms.Compose([
             lambda t: t.permute(0, 3, 1, 2),
-            RandomFrameDrop(0.05), torch.unbind,
-            Map(
+            t.RandomFrameDrop(0.05), torch.unbind,
+            t.Map(
                 transforms.Compose(
                     [transforms.ToPILImage(),
                      transforms.Grayscale()])),
-            video_transforms.CenterCrop([122, 122]),
-            video_transforms.RandomCrop([112, 112]),
-            video_transforms.RandomHorizontalFlip(),
-            Map(transforms.ToTensor()), torch.stack,
+            t.CenterCrop([122, 122]),
+            t.RandomCrop([112, 112]),
+            t.RandomHorizontalFlip(),
+            t.Map(transforms.ToTensor()), torch.stack,
             lambda t: t.transpose(0, 1),
-            Normalize()
+            t.Normalize()
         ])
 
     def val_transform(self):
         return transforms.Compose([
             lambda t: t.permute(0, 3, 1, 2), torch.unbind,
-            Map(
+            t.Map(
                 transforms.Compose(
                     [transforms.ToPILImage(),
                      transforms.Grayscale()])),
-            video_transforms.CenterCrop([112, 112]),
-            Map(transforms.ToTensor()), torch.stack,
+            t.CenterCrop([112, 112]),
+            t.Map(transforms.ToTensor()), torch.stack,
             lambda t: t.transpose(0, 1),
-            Normalize()
+            t.Normalize()
         ])
 
     @pl.data_loader
