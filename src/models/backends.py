@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -33,29 +34,89 @@ class ConvolutionalBackend(nn.Module):
         return x
 
 
-class LSTMBackend(nn.Module):
-    def __init__(self, input_channels, output_channels):
+class TransformerBackend(nn.Module):
+    def __init__(self, n_vocab, d_model, frontend):
         super().__init__()
-        self.lstm = nn.LSTM(input_size=256,
-                            hidden_size=256,
-                            num_layers=2,
-                            batch_first=True,
-                            bidirectional=True)
+        self.frontend = frontend
+        self.embedding = nn.Embedding(n_vocab, d_model)
+        self.transformer = nn.Transformer(d_model=d_model)
+        self.linear = nn.Linear(d_model, n_vocab)
 
-        self.linear = nn.Linear(2 * 256, output_channels)
+    def forward(self, x, y):
 
-    def forward(self, x):
+        if self.frontend:
+            x = self.frontend(x)
 
-        x, _ = self.lstm(x)
-        # batch x seq x 2*hidden_size
+        y_embedded = self.embedding(y)
 
-        x = self.linear(x)
-        # batch x seq x 500
+        # nn.Transformer wants shapes (S, N, E)...
+        src = x.transpose(0, 1).contiguous()
+        # ...and (T, N, E)
+        tgt = y_embedded.transpose(0, 1).contiguous()
 
-        # alternatively the last hidden state could be used:
-        # x = x[:, -1, :]
-        # but mean of all states should result in higher accuracy
-        x = x.mean(dim=1)
-        # batch x 500
+        # not allowed to look ahead
+        tgt_mask = self.transformer.generate_square_subsequent_mask(
+            len(tgt)).cuda()
 
-        return x
+        out = self.transformer(src, tgt, tgt_mask=tgt_mask)
+
+        pred = self.linear(out)
+
+        # seq_len x batch_size x n_vocab -> batch_size x n_vocab x seq_len_n_vocab
+        pred = pred.permute(1, 2, 0).contiguous()
+
+        return pred
+
+    def inference(self, x, vocab):
+        with torch.no_grad():
+
+            sos = vocab['<sos>']
+            pad = vocab['<pad>']
+
+            if self.frontend:
+                x = self.frontend(x)
+
+            batch_size = len(x)
+
+            # every prediction starts with <sos>
+            y = torch.tensor([sos] * batch_size).view(batch_size, 1).cuda()
+
+            # for each sequence in batch keep track if <pad> (indicates end of sequence)
+            # has been seen
+            done = torch.tensor([False] * batch_size).cuda()
+
+            seq_len = 0
+
+            while not done.all():
+
+                y_embedded = self.embedding(y)
+
+                src = x.transpose(0, 1).contiguous()
+                tgt = y_embedded.transpose(0, 1).contiguous()
+
+                tgt_mask = self.transformer.generate_square_subsequent_mask(
+                    len(tgt)).cuda()
+
+                out = self.transformer(src, tgt, tgt_mask=tgt_mask)
+
+                # transformer outputs (T, N, E)
+                # where T = target seq len, N = batch size, E = embedding dim size
+                #
+                # let's take the last char of the predicted sequence for each batch: out[-1, :, :]
+                pred = self.linear(out[-1])
+                # pred is of shape (N, n_vocab)
+
+                greedy = pred.argmax(dim=1, keepdim=True)
+                # greedy is of shape (batch_size, 1) and contains
+                # the index for the best token
+
+                y = torch.cat([y, greedy], dim=1).cuda()
+
+                seq_len += 1
+
+                done = done | (greedy.squeeze() == pad)
+
+                if seq_len > 100:
+                    break
+
+        return y
