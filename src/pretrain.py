@@ -8,12 +8,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
-import torchvision
-import torchvision.transforms as transforms
 
 from models.models import PretrainNet
-from util.data import LRW1Dataset
-import util.transforms as t
+from util import data
 
 
 class LipreadingClassifier(pl.LightningModule):
@@ -123,50 +120,20 @@ class LipreadingClassifier(pl.LightningModule):
             }
         }
 
-    def train_transform(self):
-        return transforms.Compose([
-            lambda t: t.permute(0, 3, 1, 2),
-            t.RandomFrameDrop(0.05), torch.unbind,
-            t.Map(
-                transforms.Compose(
-                    [transforms.ToPILImage(),
-                     transforms.Grayscale()])),
-            t.CenterCrop([122, 122]),
-            t.RandomCrop([112, 112]),
-            t.RandomHorizontalFlip(),
-            t.Map(transforms.ToTensor()), torch.stack,
-            lambda t: t.transpose(0, 1),
-            t.Normalize()
-        ])
-
-    def val_transform(self):
-        return transforms.Compose([
-            lambda t: t.permute(0, 3, 1, 2), torch.unbind,
-            t.Map(
-                transforms.Compose(
-                    [transforms.ToPILImage(),
-                     transforms.Grayscale()])),
-            t.CenterCrop([112, 112]),
-            t.Map(transforms.ToTensor()), torch.stack,
-            lambda t: t.transpose(0, 1),
-            t.Normalize()
-        ])
-
     @pl.data_loader
     def train_dataloader(self):
         if self.hparams.augment >= 1:
-            transform = self.train_transform()
+            transform = data.train_transform()
         elif self.hparams.augment < 1:
-            transform = self.val_transform()
+            transform = data.val_transform()
         else:
             raise RuntimeError(
                 f'invalid hparams.augment value {self.hparams.augment}')
 
-        train_ds = LRW1Dataset(root=self.hparams.data_root,
-                               subdir='train',
-                               loader=lambda filename: torchvision.io.
-                               read_video(filename, pts_unit='sec')[0],
-                               transform=transform)
+        train_ds = data.LRW1Dataset(root=self.hparams.data_root,
+                                    subdir='train',
+                                    loader=data.video_loader,
+                                    transform=transform)
 
         train_dl = DataLoader(train_ds,
                               batch_size=self.hparams.batch_size,
@@ -177,13 +144,10 @@ class LipreadingClassifier(pl.LightningModule):
 
     @pl.data_loader
     def val_dataloader(self):
-        transform = self.val_transform()
-
-        val_ds = LRW1Dataset(root=self.hparams.data_root,
-                             subdir='val',
-                             loader=lambda filename: torchvision.io.read_video(
-                                 filename, pts_unit='sec')[0],
-                             transform=transform)
+        val_ds = data.LRW1Dataset(root=self.hparams.data_root,
+                                  subdir='val',
+                                  loader=data.video_loader,
+                                  transform=data.val_transform())
 
         val_dl = DataLoader(val_ds,
                             batch_size=2 * self.hparams.batch_size,
@@ -194,13 +158,11 @@ class LipreadingClassifier(pl.LightningModule):
 
     @pl.data_loader
     def test_dataloader(self):
-        transform = self.val_transform()
 
-        test_ds = LRW1Dataset(root=self.hparams.data_root,
-                              subdir='test',
-                              loader=lambda filename: torchvision.io.
-                              read_video(filename, pts_unit='sec')[0],
-                              transform=transform)
+        test_ds = data.LRW1Dataset(root=self.hparams.data_root,
+                                   subdir='test',
+                                   loader=data.video_loader,
+                                   transform=data.val_transform())
 
         test_dl = DataLoader(test_ds,
                              batch_size=2 * self.hparams.batch_size,
@@ -272,11 +234,14 @@ def main(hparams):
     trainer.fit(module)
     trainer.test()
 
+    # TODO: is there some easy way to get model weights from pl checkpoint
     weights_path = os.path.join(logger.save_dir, logger.name,
                                 f'version_{logger.experiment.version}',
-                                "weights", "frontend-weights.pt")
+                                "weights")
+    os.makedirs(weights_path, exist_ok=True)
 
-    torch.save(module.model.frontend.state_dict(), weights_path)
+    torch.save(module.model.frontend.state_dict(),
+               os.path.join(weights_path, 'frontend_weights.pt'))
 
 
 if __name__ == '__main__':

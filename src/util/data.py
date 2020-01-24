@@ -3,6 +3,63 @@ import torch
 from random import randint
 from collections import defaultdict
 from torchvision.datasets.vision import VisionDataset
+import torchvision
+import util.transforms as t
+import torchvision.transforms as transforms
+
+
+def video_loader(path):
+    video, audio, info = torchvision.io.read_video(path, pts_unit='sec')
+    return video
+
+
+def train_transform():
+    return transforms.Compose([
+        lambda t: t.permute(0, 3, 1, 2),
+        t.RandomFrameDrop(0.05), torch.unbind,
+        t.Map(
+            transforms.Compose(
+                [transforms.ToPILImage(),
+                 transforms.Grayscale()])),
+        t.CenterCrop([122, 122]),
+        t.RandomCrop([112, 112]),
+        t.RandomHorizontalFlip(),
+        t.Map(transforms.ToTensor()), torch.stack, lambda t: t.transpose(0, 1),
+        t.Normalize()
+    ])
+
+
+def val_transform():
+    return transforms.Compose([
+        lambda t: t.permute(0, 3, 1, 2), torch.unbind,
+        t.Map(
+            transforms.Compose(
+                [transforms.ToPILImage(),
+                 transforms.Grayscale()])),
+        t.CenterCrop([112, 112]),
+        t.Map(transforms.ToTensor()), torch.stack, lambda t: t.transpose(0, 1),
+        t.Normalize()
+    ])
+
+
+def pad_collate(samples, padding_value, sos_value):
+    x, y = zip(*samples)
+
+    collated = torch.nn.utils.rnn.pad_sequence(x, batch_first=True)
+    collated_y = torch.nn.utils.rnn.pad_sequence(y,
+                                                 batch_first=True,
+                                                 padding_value=padding_value)
+
+    # add sos to the beginning and pad to the end
+    # TODO: would it be better to use <eos> and <pad> instead of just pad?
+    batch_size = len(x)
+    collated_y = torch.cat([
+        torch.tensor([sos_value] * batch_size).view(batch_size, 1), collated_y,
+        torch.tensor([padding_value] * batch_size).view(batch_size, 1)
+    ],
+                           dim=-1)
+
+    return collated, collated_y
 
 
 class LRS2PretrainSample():
@@ -136,9 +193,18 @@ class LRS2PretrainDataset(VisionDataset):
 
 
 class LRW1Dataset(VisionDataset):
-    def __init__(self, root, subdir, loader, transform=None):
+    def __init__(self,
+                 root,
+                 subdir,
+                 loader,
+                 transform=None,
+                 easy=False,
+                 classification=True):
         super().__init__(root, transform=transform)
-
+        self.easy = easy
+        self.classification = classification
+        # TODO: params should not be hardcoded
+        self.vocab = CharVocab(sos=True)
         classes, class_to_idx = self._find_classes(self.root)
         samples = self._make_dataset(root, subdir, class_to_idx)
 
@@ -150,6 +216,10 @@ class LRW1Dataset(VisionDataset):
 
     def _find_classes(self, root):
         classes = sorted([d.name for d in os.scandir(root) if d.is_dir()])
+
+        if self.easy:
+            classes = classes[:50]
+
         class_to_idx = {classes[i]: i for i in range(len(classes))}
         return classes, class_to_idx
 
@@ -171,22 +241,24 @@ class LRW1Dataset(VisionDataset):
                     path = os.path.join(root, fname)
 
                     if is_valid_file(path):
-                        item = (path, class_to_idx[target])
+                        target_class = class_to_idx[target]
+                        target_chars = torch.tensor(
+                            [self.vocab.token2idx(token) for token in target])
+                        item = (path, target_class, target_chars)
                         samples.append(item)
 
         return samples
 
     def __getitem__(self, idx):
-        path, target = self.samples[idx]
+        path, target_class, target_chars = self.samples[idx]
         sample = self.loader(path)
 
-        try:
-            assert len(sample) == 29
-        except AssertionError:
-            print(f'len of {path} is {len(sample)}')
+        assert len(sample) == 29
 
         if self.transform is not None:
             sample = self.transform(sample)
+
+        target = target_class if self.classification else target_chars
 
         return sample, target
 
