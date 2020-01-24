@@ -1,4 +1,5 @@
 import os
+import torch
 from random import randint
 from collections import defaultdict
 from torchvision.datasets.vision import VisionDataset
@@ -9,8 +10,8 @@ class LRS2PretrainSample():
         self.path = path
 
         lines = text.split('\n')
-        # self.text = ' '.join(lines[0].split()[1:])
-        # self.conf = int(lines[1].split()[1])
+        self.text = ' '.join(lines[0].split()[1:])
+        self.conf = int(lines[1].split()[1])
 
         prev_end = -1
         possible_beginnings = [[]]
@@ -66,20 +67,45 @@ class LRS2PretrainSample():
         return sampled['utterance'], (sampled['start'], sampled['end'])
 
 
+class CharVocab:
+    def __init__(self, sos=False, blank=False):
+
+        # vocab has 26 chars, 10 digits, space, apostophe and pad
+        # + for TM-seq2seq [sos] and TM-CTC [blank]
+        self.tokens = ['<pad>', ' ', "'"] + [chr(i)
+                                             for i in range(65, 91)] + list(
+                                                 str(i) for i in range(10))
+
+        if sos:
+            self.tokens.append('<sos>')
+
+        if blank:
+            self.tokens.append('<blank>')
+
+        self.token2idx_dict = dict(
+            (token, i) for i, token in enumerate(self.tokens))
+
+    def idx2token(self, idx):
+        return self.tokens[idx]
+
+    def token2idx(self, token):
+        return self.token2idx_dict[token]
+
+
 class LRS2PretrainDataset(VisionDataset):
     def __init__(self, root, loader, transform=None):
         super().__init__(root, transform=transform)
         self.max_seq_len = 2
         self.loader = loader
+
+        self.vocab = CharVocab(sos=True)
         self.samples = self._make_dataset(root)
 
     def _make_dataset(self, root):
         with open(os.path.join(root, 'pretrain.txt'), 'r') as f:
             samples = []
 
-            # TODO: create vocabulary here
-
-            for line in f.readlines()[:100]:
+            for line in f.readlines():
                 mp4_path, txt_path = [
                     os.path.join(root, 'mvlrs_v1', 'pretrain',
                                  line.strip() + suffix)
@@ -105,7 +131,8 @@ class LRS2PretrainDataset(VisionDataset):
         if self.transform is not None:
             video = self.transform(video)
 
-        return video, utterance
+        return video, torch.tensor(
+            [self.vocab.token2idx(char) for char in ' '.join(utterance)])
 
 
 class LRW1Dataset(VisionDataset):
