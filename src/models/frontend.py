@@ -4,7 +4,7 @@ from .resnet import resnet18, resnet34
 
 
 class VisualFrontEnd(nn.Module):
-    def __init__(self, out_channels, resnet='resnet18'):
+    def __init__(self, out_channels, resnet):
         super().__init__()
         self.conv3d = nn.Conv3d(1,
                                 64,
@@ -27,8 +27,11 @@ class VisualFrontEnd(nn.Module):
 
         self.adaptiveAvgPool2d = nn.AdaptiveAvgPool2d(output_size=(1, 1))
 
-        self.linear = nn.Linear(512, out_channels)
-        self.bn2 = nn.BatchNorm1d(out_channels)
+        if out_channels != 512:
+            self.linear = nn.Linear(512, out_channels)
+            self.bn2 = nn.BatchNorm1d(out_channels)
+        else:
+            self.bn2 = nn.BatchNorm1d(512)
 
     def forward(self, x):
         x = F.relu(self.bn1(self.conv3d(x)))  # batch x 64 x 29 x 56 x 56
@@ -36,8 +39,7 @@ class VisualFrontEnd(nn.Module):
         x = self.max_pool3d(x)  # batch x 64 x 29 x 28 x 28
 
         # transpose channel and depth
-        x = x.transpose(1, 2)
-        x = x.contiguous()
+        x = x.transpose(1, 2).contiguous()
 
         # merge batch and depth
         batch, depth, channel, height, width = x.shape
@@ -47,7 +49,11 @@ class VisualFrontEnd(nn.Module):
 
         x = self.adaptiveAvgPool2d(x).squeeze()  # batch*29 x 512
 
-        x = self.bn2(self.linear(x))  # batch*29 x out_channels
+        # Apply linear if output dim != 512
+        if hasattr(self, 'linear'):
+            x = self.linear(x)  # batch*29 x out_channels
+
+        x = self.bn2(x)
 
         x = x.view(batch, depth, -1)  # batch x 29 x out_channels
 
