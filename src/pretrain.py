@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 import torchvision
 import torchvision.transforms as transforms
 
-from models.models import LipreadingResNet
+from models.models import PretrainNet
 from util.data import LRW1Dataset
 import util.transforms as t
 
@@ -20,7 +20,7 @@ class LipreadingClassifier(pl.LightningModule):
     def __init__(self, hparams):
         super().__init__()
         self.hparams = hparams
-        self.model = LipreadingResNet(hparams.resnet, hparams.backend)
+        self.model = PretrainNet(hparams.resnet, nh=hparams.n_hidden)
         self.__init_weights()
 
     def __init_weights(self):
@@ -43,10 +43,6 @@ class LipreadingClassifier(pl.LightningModule):
             'accuracy/train': accuracy,
             'learning_rate': self.trainer.optimizers[0].param_groups[0]['lr']
         }
-
-        print(
-            f'train | epoch: {self.current_epoch:03} | batch: {(self.global_step % len(self.train_dataloader())):09} | loss: {loss.item():.3f} | accuracy: {accuracy.item():.3f} | learning_rate: {self.trainer.optimizers[0].param_groups[0]["lr"]:.5f}'
-        )
 
         return {'loss': loss, 'log': log}
 
@@ -78,10 +74,6 @@ class LipreadingClassifier(pl.LightningModule):
         loss = F.cross_entropy(pred, y)
         accuracy = (pred.argmax(dim=1) == y).float().mean()
 
-        print(
-            f'valid | epoch: {self.current_epoch:03} | batch: {(self.global_step % len(self.train_dataloader())):09} | loss: {loss.item():.3f} | accuracy: {accuracy.item():.3f} | learning_rate: {self.trainer.optimizers[0].param_groups[0]["lr"]:.5f}'
-        )
-
         return {'val_loss': loss, 'val_acc': accuracy}
 
     def validation_end(self, outputs):
@@ -96,7 +88,7 @@ class LipreadingClassifier(pl.LightningModule):
         val_acc_mean /= len(outputs)
 
         return {
-            'val_loss': val_loss_mean,
+            'val_acc': val_acc_mean,
             'log': {
                 'loss/valid': val_loss_mean,
                 'accuracy/valid': val_acc_mean
@@ -223,7 +215,7 @@ class LipreadingClassifier(pl.LightningModule):
 
         # model
         parser.add_argument('--resnet', type=str)
-        parser.add_argument('--backend', type=str)
+        parser.add_argument('--n_hidden', type=int, default=512)
         parser.add_argument('--learning_rate', default=3e-4, type=float)
         parser.add_argument('--weight_decay', default=1e-3, type=float)
         parser.add_argument('--batch_size', default=64, type=int)
@@ -246,43 +238,51 @@ class LipreadingClassifier(pl.LightningModule):
 def main(hparams):
     module = LipreadingClassifier(hparams)
 
-    print(hparams)
+    version = int(hparams.checkpoint) if hparams.checkpoint else None
 
-    if hparams.checkpoint:
-        print(f'loading from checkpoint {hparams.checkpoint}...')
-        logger = TestTubeLogger(save_dir='lightning_logs',
-                                version=hparams.checkpoint)
-        trainer = pl.Trainer(logger=logger)
-    else:
-        trainer = pl.Trainer(show_progress_bar=False,
-                             gpus=1,
-                             log_gpu_memory='all',
-                             fast_dev_run=hparams.fast_dev_run,
-                             max_nb_epochs=hparams.max_epochs,
-                             track_grad_norm=hparams.track_grad_norm)
+    logger = TestTubeLogger(save_dir=os.path.join(os.getcwd(),
+                                                  'lightning_logs'),
+                            name='pretrain',
+                            version=version,
+                            description=hparams.description)
 
-    if hparams.frontend_weights:
-        print('loading weights from a pretrained model...')
-        module.model.frontend.load_state_dict(
-            torch.load(hparams.frontend_weights))
+    early_stopping = pl.callbacks.EarlyStopping(monitor='val_acc',
+                                                patience=3,
+                                                verbose=True,
+                                                mode='max')
 
-        print('setting frontend requires_grad to False...')
-        for param in module.model.frontend.parameters():
-            param.requires_grad = False
+    ckpt_path = os.path.join(logger.save_dir, logger.name,
+                             f'version_{logger.experiment.version}',
+                             "checkpoints")
+    checkpoint_callback = pl.callbacks.ModelCheckpoint(filepath=ckpt_path,
+                                                       monitor='val_acc',
+                                                       mode='max',
+                                                       verbose=True)
+
+    trainer = pl.Trainer(logger=logger,
+                         early_stop_callback=early_stopping,
+                         checkpoint_callback=checkpoint_callback,
+                         show_progress_bar=True,
+                         gpus=1,
+                         log_gpu_memory='all',
+                         fast_dev_run=hparams.fast_dev_run,
+                         max_nb_epochs=hparams.max_epochs,
+                         track_grad_norm=hparams.track_grad_norm)
 
     trainer.fit(module)
     trainer.test()
 
-    path = os.path.join(trainer.logger.save_dir, 'lightning_logs',
-                        f'version_{trainer.logger.version}',
-                        'frontend-weights.pt')
+    weights_path = os.path.join(logger.save_dir, logger.name,
+                                f'version_{logger.experiment.version}',
+                                "weights", "frontend-weights.pt")
 
-    torch.save(module.model.frontend.state_dict(), path)
+    torch.save(module.model.frontend.state_dict(), weights_path)
 
 
 if __name__ == '__main__':
     parser = ArgumentParser(add_help=False)
     parser.add_argument('--track_grad_norm', type=int, default=-1)
+    parser.add_argument('--description', type=str, default='')
     parser = LipreadingClassifier.add_model_specific_args(parser)
 
     hparams = parser.parse_args()
