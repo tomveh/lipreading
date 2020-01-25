@@ -1,3 +1,4 @@
+from functools import partial
 from pathlib import Path
 from argparse import ArgumentParser
 
@@ -108,9 +109,10 @@ class TransformerModel(pl.LightningModule):
                 [f'{label} | {pred} |' for label, pred in zip(labels, preds)])
             string = string.replace('<sos>', 's').replace('<pad>', 'p')
 
-            self.logger.experiment.add_text(tag='prediction',
-                                            text_string=string,
-                                            global_step=self.global_step)
+            if not self.logger.debug:
+                self.logger.experiment.add_text(tag='prediction',
+                                                text_string=string,
+                                                global_step=self.global_step)
 
             self.text_summary = False
 
@@ -241,10 +243,6 @@ class TransformerModel(pl.LightningModule):
 
         # training
         parser.add_argument('--workers', default=16, type=int)
-        parser.add_argument('--weight_hist', default=0, type=int)
-        parser.add_argument('--checkpoint', default='', type=str)
-        parser.add_argument('--fast_dev_run', default=0, type=int)
-        parser.add_argument('--frontend_weights', default='', type=str)
 
         return parser
 
@@ -252,37 +250,41 @@ class TransformerModel(pl.LightningModule):
 def main(hparams):
     module = TransformerModel(hparams)
 
-    save_dir = Path('.') / 'lightning_logs'
+    save_dir = Path(__file__).parent.parent.absolute() / 'lightning_logs'
     experiment_name = 'train'
     version = int(hparams.checkpoint) if hparams.checkpoint else None
 
+    debug = hparams.debug > 0
+
     logger = TestTubeLogger(save_dir=save_dir,
                             name=experiment_name,
-                            debug=hparams.fast_dev_run > 0,
-                            version=version,
-                            description=hparams.description)
+                            description=hparams.description,
+                            debug=debug,
+                            version=version)
 
     base_path = save_dir / experiment_name / \
         f'version_{logger.experiment.version}'
+
     early_stopping = EarlyStopping(monitor='val_acc',
                                    patience=3,
                                    verbose=True,
                                    mode='max')
 
-    checkpoint_callback = ModelCheckpoint(filepath=base_path / 'checkpoints',
-                                          monitor='val_acc',
-                                          mode='max',
-                                          verbose=True)
+    checkpoint_callback = partial(ModelCheckpoint,
+                                  filepath=base_path / 'checkpoint',
+                                  monitor='val_acc',
+                                  mode='max',
+                                  verbose=True)
 
     trainer = pl.Trainer(
         logger=logger,
         early_stop_callback=early_stopping,
-        checkpoint_callback=checkpoint_callback,
+        checkpoint_callback=checkpoint_callback() if not debug else False,
         gpus=1,
         log_gpu_memory='all',
         print_nan_grads=True,
         accumulate_grad_batches=hparams.accumulate_grad_batches,
-        fast_dev_run=hparams.fast_dev_run,
+        fast_dev_run=debug,
         max_nb_epochs=hparams.max_epochs,
         track_grad_norm=hparams.track_grad_norm)
 
@@ -309,6 +311,10 @@ if __name__ == '__main__':
     parser.add_argument('--max_epochs', default=100, type=int)
     parser.add_argument('--accumulate_grad_batches', type=int, default=1)
     parser.add_argument('--description', type=str, default='')
+    parser.add_argument('--weight_hist', default=0, type=int)
+    parser.add_argument('--checkpoint', default='', type=str)
+    parser.add_argument('--debug', default=0, type=int)
+    parser.add_argument('--frontend_weights', default='', type=str)
     parser = TransformerModel.add_model_specific_args(parser)
 
     hparams = parser.parse_args()

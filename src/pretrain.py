@@ -189,11 +189,6 @@ class LipreadingClassifier(pl.LightningModule):
 
         # training
         parser.add_argument('--workers', default=16, type=int)
-        parser.add_argument('--weight_hist', default=0, type=int)
-        parser.add_argument('--max_epochs', default=100, type=int)
-        parser.add_argument('--checkpoint', type=str)
-        parser.add_argument('--fast_dev_run', default=0, type=int)
-        parser.add_argument('--frontend_weights', type=str)
 
         return parser
 
@@ -249,6 +244,10 @@ if __name__ == '__main__':
     parser = ArgumentParser(add_help=False)
     parser.add_argument('--track_grad_norm', type=int, default=-1)
     parser.add_argument('--description', type=str, default='')
+    parser.add_argument('--fast_dev_run', default=0, type=int)
+    parser.add_argument('--weight_hist', default=0, type=int)
+    parser.add_argument('--max_epochs', default=100, type=int)
+    parser.add_argument('--checkpoint', type=str)
     parser = LipreadingClassifier.add_model_specific_args(parser)
 
     hparams = parser.parse_args()
