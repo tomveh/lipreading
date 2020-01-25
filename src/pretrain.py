@@ -1,7 +1,8 @@
-import os.path
+from pathlib import Path
 from argparse import ArgumentParser
 
 import pytorch_lightning as pl
+from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.logging import TestTubeLogger
 import torch
 import torch.nn as nn
@@ -200,26 +201,28 @@ class LipreadingClassifier(pl.LightningModule):
 def main(hparams):
     module = LipreadingClassifier(hparams)
 
+    save_dir = Path('.') / 'lightning_logs'
+    experiment_name = 'pretrain'
     version = int(hparams.checkpoint) if hparams.checkpoint else None
 
-    logger = TestTubeLogger(save_dir=os.path.join(os.getcwd(),
-                                                  'lightning_logs'),
-                            name='pretrain',
+    logger = TestTubeLogger(save_dir=save_dir,
+                            name=experiment_name,
+                            debug=hparams.fast_dev_run > 0,
                             version=version,
                             description=hparams.description)
 
-    early_stopping = pl.callbacks.EarlyStopping(monitor='val_acc',
-                                                patience=3,
-                                                verbose=True,
-                                                mode='max')
+    base_path = save_dir / experiment_name / \
+        f'version_{logger.experiment.version}'
 
-    ckpt_path = os.path.join(logger.save_dir, logger.name,
-                             f'version_{logger.experiment.version}',
-                             "checkpoints")
-    checkpoint_callback = pl.callbacks.ModelCheckpoint(filepath=ckpt_path,
-                                                       monitor='val_acc',
-                                                       mode='max',
-                                                       verbose=True)
+    early_stopping = EarlyStopping(monitor='val_acc',
+                                   patience=3,
+                                   verbose=True,
+                                   mode='max')
+
+    checkpoint_callback = ModelCheckpoint(filepath=base_path / 'checkpoints',
+                                          monitor='val_acc',
+                                          mode='max',
+                                          verbose=True)
 
     trainer = pl.Trainer(logger=logger,
                          early_stop_callback=early_stopping,
@@ -235,13 +238,11 @@ def main(hparams):
     trainer.test()
 
     # TODO: is there some easy way to get model weights from pl checkpoint
-    weights_path = os.path.join(logger.save_dir, logger.name,
-                                f'version_{logger.experiment.version}',
-                                "weights")
-    os.makedirs(weights_path, exist_ok=True)
+    weights_path = base_path / "weights"
+    weights_path.mkdir(parents=True, exist_ok=True)
 
     torch.save(module.model.frontend.state_dict(),
-               os.path.join(weights_path, 'frontend_weights.pt'))
+               weights_path / 'frontend_weights.pt')
 
 
 if __name__ == '__main__':
