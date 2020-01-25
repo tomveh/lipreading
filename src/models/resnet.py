@@ -3,21 +3,26 @@ import torch.nn.functional as F
 
 
 def resnet18():
-    return ResNet(depths=[2, 2, 2, 2])
+    return ResNet(num_blocks=[2, 2, 2, 2])
 
 
 def resnet34():
-    return ResNet(depths=[3, 4, 6, 3])
+    return ResNet(num_blocks=[3, 4, 6, 3])
 
 
+# note that there is no bottleneck so this only works for resnet18 and resnet34
 class ResNet(nn.Module):
-    def __init__(self, depths, block_sizes=[64, 128, 256, 512]):
+    def __init__(self, num_blocks, block_sizes=[64, 128, 256, 512]):
         super().__init__()
 
+        channels = enumerate(zip(block_sizes[:-1], block_sizes[1:]))
+
         self.model = nn.Sequential(*[
-            ResidualLayer(inc, outc, depths[i], preactivation=(i > 0))
-            for i, (inc,
-                    outc) in enumerate(zip(block_sizes[:-1], block_sizes[1:]))
+            ResidualLayer(in_channels,
+                          out_channels,
+                          blocks=num_blocks[i],
+                          preactivation=(i > 0))
+            for i, (in_channels, out_channels) in channels
         ])
 
     def forward(self, x):
@@ -25,22 +30,23 @@ class ResNet(nn.Module):
 
 
 class ResidualLayer(nn.Module):
-    def __init__(self, in_channels, out_channels, blocks, preactivation=True):
+    def __init__(self, in_channels, out_channels, blocks, preactivation):
         super().__init__()
         self.model = nn.Sequential(
             ResidualBlock(in_channels,
                           out_channels,
-                          preactivation=preactivation), *[
-                              ResidualBlock(out_channels, out_channels)
-                              for _ in range(blocks - 1)
-                          ])
+                          preactivation=preactivation),
+            *[
+                ResidualBlock(out_channels, out_channels, preactivation=True)
+                for _ in range(blocks - 1)
+            ])
 
     def forward(self, x):
         return self.model(x)
 
 
 class ResidualBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, preactivation=True):
+    def __init__(self, in_channels, out_channels, preactivation):
         super().__init__()
 
         if preactivation:
@@ -50,23 +56,9 @@ class ResidualBlock(nn.Module):
         stride = 2 if in_channels != out_channels else 1
 
         self.bn2 = nn.BatchNorm2d(out_channels)
-        self.conv1 = nn.Conv2d(in_channels,
-                               out_channels,
-                               kernel_size=3,
-                               stride=stride,
-                               padding=1,
-                               bias=False)
-        self.conv2 = nn.Conv2d(out_channels,
-                               out_channels,
-                               kernel_size=3,
-                               stride=1,
-                               padding=1,
-                               bias=False)
-        self.shortcut_conv = nn.Conv2d(in_channels,
-                                       out_channels,
-                                       kernel_size=(1, 1),
-                                       stride=stride,
-                                       bias=False)
+        self.conv1 = _conv3x3(in_channels, out_channels, stride=stride)
+        self.conv2 = _conv3x3(out_channels, out_channels, stride=1)
+        self.shortcut_conv = _conv1x1(in_channels, out_channels, stride=stride)
 
     def forward(self, x):
         # don't do bn and relu if we just did bn, relu and max_pool
@@ -79,3 +71,20 @@ class ResidualBlock(nn.Module):
             x = self.shortcut_conv(x)
 
         return x + residual
+
+
+def _conv3x3(in_channels, out_channels, stride):
+    return nn.Conv2d(in_channels,
+                     out_channels,
+                     kernel_size=(3, 3),
+                     stride=stride,
+                     padding=1,
+                     bias=False)
+
+
+def _conv1x1(in_channels, out_channels, stride):
+    return nn.Conv2d(in_channels,
+                     out_channels,
+                     kernel_size=(1, 1),
+                     stride=stride,
+                     bias=False)
