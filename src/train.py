@@ -22,8 +22,8 @@ class TransformerModel(pl.LightningModule):
         frontend = VisualFrontEnd(out_channels=hparams.d_model,
                                   resnet='resnet18')
 
-        n_vocab = 40  # TODO
-        self.model = TransformerBackend(n_vocab=n_vocab,
+        self.vocab = data.CharVocab(sos=True)
+        self.model = TransformerBackend(vocab=self.vocab,
                                         d_model=hparams.d_model,
                                         frontend=frontend)
         self.loss_fn = nn.CrossEntropyLoss()
@@ -43,7 +43,7 @@ class TransformerModel(pl.LightningModule):
         # drop <sos> and add <pad> to the end of every sequence
         target = torch.cat([
             y[:, 1:],
-            torch.tensor([self.vocab['<pad>']] * batch_size).view(
+            torch.tensor([self.vocab.token2idx('<pad>')] * batch_size).view(
                 batch_size, 1).type_as(y)
         ],
                            dim=1)
@@ -80,15 +80,17 @@ class TransformerModel(pl.LightningModule):
     def validation_step(self, batch, batch_nr):
         x, y = batch
 
-        pred = self.model.inference(x, self.vocab)
+        pred = self.model.inference(x)
 
         batch_size = len(x)
         max_seq_len = max(y.shape[1], pred.shape[1])
 
         # make two tensors of the same shape to compare prediction and label
-        pred_long = torch.ones([batch_size, max_seq_len]) * self.vocab['<pad>']
+        pred_long = torch.ones([batch_size, max_seq_len
+                                ]) * self.vocab.token2idx('<pad>')
         pred_long[:, :pred.shape[1]] = pred
-        y_long = torch.ones([batch_size, max_seq_len]) * self.vocab['<pad>']
+        y_long = torch.ones([batch_size, max_seq_len
+                             ]) * self.vocab.token2idx('<pad>')
         y_long[:, :y.shape[1]] = y
 
         accuracy = (y_long == pred_long).all(dim=1).float().mean()
@@ -96,7 +98,7 @@ class TransformerModel(pl.LightningModule):
         if self.text_summary:
 
             def lookup(idx):
-                return self.inverse_vocab[idx.item()]
+                return self.vocab.idx2token(idx.item())
 
             preds = [''.join(lookup(idx) for idx in line) for line in pred]
             labels = [''.join(lookup(idx) for idx in line) for line in y]
@@ -134,14 +136,16 @@ class TransformerModel(pl.LightningModule):
     def test_step(self, batch, batch_nr):
         x, y = batch
 
-        pred = self.model.inference(x, vocab=self.vocab)
+        pred = self.model.inference(x)
 
         batch_size = len(x)
         max_seq_len = max(y.shape[1], pred.shape[1])
 
-        pred_long = torch.ones([batch_size, max_seq_len]) * self.vocab['<pad>']
+        pad = self.vocab.token2idx('<pad>')
+
+        pred_long = torch.ones([batch_size, max_seq_len]) * pad
         pred_long[:, :pred.shape[1]] = pred
-        y_long = torch.ones([batch_size, max_seq_len]) * self.vocab['<pad>']
+        y_long = torch.ones([batch_size, max_seq_len]) * pad
         y_long[:, :y.shape[1]] = y
 
         accuracy = (y_long == pred_long).all(dim=1).float().mean()
@@ -166,20 +170,15 @@ class TransformerModel(pl.LightningModule):
                                     read_video(path, pts_unit='sec')[0],
                                     transform=data.train_transform(),
                                     easy=self.hparams.easy,
-                                    classification=False)
-
-        self.vocab = dict(
-            (token, i) for i, token in enumerate(train_ds.vocab.tokens))
-        self.inverse_vocab = dict(
-            (i, token) for token, i in self.vocab.items())
+                                    vocab=self.vocab)
 
         train_dl = DataLoader(train_ds,
                               batch_size=self.hparams.batch_size,
                               shuffle=True,
                               collate_fn=lambda x: data.pad_collate(
                                   x,
-                                  padding_value=self.vocab['<pad>'],
-                                  sos_value=self.vocab['<sos>']),
+                                  padding_value=self.vocab.token2idx('<pad>'),
+                                  sos_value=self.vocab.token2idx('<sos>')),
                               num_workers=self.hparams.workers)
 
         return train_dl
@@ -192,15 +191,15 @@ class TransformerModel(pl.LightningModule):
                                   read_video(path, pts_unit='sec')[0],
                                   transform=data.val_transform(),
                                   easy=self.hparams.easy,
-                                  classification=False)
+                                  vocab=self.vocab)
 
         val_dl = DataLoader(val_ds,
                             batch_size=2 * self.hparams.batch_size,
                             shuffle=True,
                             collate_fn=lambda x: data.pad_collate(
                                 x,
-                                padding_value=self.vocab['<pad>'],
-                                sos_value=self.vocab['<sos>']),
+                                padding_value=self.vocab.token2idx('<pad>'),
+                                sos_value=self.vocab.token2idx('<sos>')),
                             num_workers=self.hparams.workers)
 
         return val_dl
@@ -213,15 +212,15 @@ class TransformerModel(pl.LightningModule):
                                    read_video(path, pts_unit='sec')[0],
                                    transform=data.val_transform(),
                                    easy=self.hparams.easy,
-                                   classification=False)
+                                   vocab=self.vocab)
 
         test_ds = DataLoader(test_ds,
                              batch_size=2 * self.hparams.batch_size,
                              shuffle=True,
                              collate_fn=lambda x: data.pad_collate(
                                  x,
-                                 padding_value=self.vocab['<pad>'],
-                                 sos_value=self.vocab['<sos>']),
+                                 padding_value=self.vocab.token2idx('<pad>'),
+                                 sos_value=self.vocab.token2idx('<sos>')),
                              num_workers=self.hparams.workers)
 
         return test_ds

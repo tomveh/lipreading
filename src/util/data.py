@@ -62,6 +62,34 @@ def pad_collate(samples, padding_value, sos_value):
     return collated, collated_y
 
 
+class CharVocab:
+    def __init__(self, sos=False, blank=False):
+
+        # vocab has 26 chars, 10 digits, space, apostophe and pad
+        # + <sos> for seq2seq and <blank> for CTC-based
+        self._tokens = ['<pad>', ' ', "'"] + [chr(i)
+                                              for i in range(65, 91)] + list(
+                                                  str(i) for i in range(10))
+
+        if sos:
+            self._tokens.append('<sos>')
+
+        if blank:
+            self._tokens.append('<blank>')
+
+        self._token2idx_dict = dict(
+            (token, i) for i, token in enumerate(self._tokens))
+
+    def idx2token(self, idx):
+        return self._tokens[idx]
+
+    def token2idx(self, token):
+        return self._token2idx_dict[token]
+
+    def __len__(self):
+        return len(self._tokens)
+
+
 class LRS2PretrainSample():
     def __init__(self, path, text):
         self.path = path
@@ -124,38 +152,13 @@ class LRS2PretrainSample():
         return sampled['utterance'], (sampled['start'], sampled['end'])
 
 
-class CharVocab:
-    def __init__(self, sos=False, blank=False):
-
-        # vocab has 26 chars, 10 digits, space, apostophe and pad
-        # + for TM-seq2seq [sos] and TM-CTC [blank]
-        self.tokens = ['<pad>', ' ', "'"] + [chr(i)
-                                             for i in range(65, 91)] + list(
-                                                 str(i) for i in range(10))
-
-        if sos:
-            self.tokens.append('<sos>')
-
-        if blank:
-            self.tokens.append('<blank>')
-
-        self.token2idx_dict = dict(
-            (token, i) for i, token in enumerate(self.tokens))
-
-    def idx2token(self, idx):
-        return self.tokens[idx]
-
-    def token2idx(self, token):
-        return self.token2idx_dict[token]
-
-
 class LRS2PretrainDataset(VisionDataset):
-    def __init__(self, root, loader, transform=None):
+    def __init__(self, root, loader, vocab, transform=None):
         super().__init__(root, transform=transform)
         self.max_seq_len = 2
         self.loader = loader
 
-        self.vocab = CharVocab(sos=True)
+        self.vocab = vocab
         self.samples = self._make_dataset(root)
 
     def _make_dataset(self, root):
@@ -199,20 +202,17 @@ class LRW1Dataset(VisionDataset):
                  loader,
                  transform=None,
                  easy=False,
-                 classification=True):
+                 vocab=None):
         super().__init__(root, transform=transform)
         self.easy = easy
-        self.classification = classification
-        # TODO: params should not be hardcoded
-        self.vocab = CharVocab(sos=True)
+        self.vocab = vocab
+        self.loader = loader
         classes, class_to_idx = self._find_classes(self.root)
         samples = self._make_dataset(root, subdir, class_to_idx)
 
-        self.loader = loader
         self.classes = classes
         self.class_to_idx = class_to_idx
         self.samples = samples
-        self.targets = [s[1] for s in samples]
 
     def _find_classes(self, root):
         classes = sorted([d.name for d in os.scandir(root) if d.is_dir()])
@@ -232,33 +232,35 @@ class LRW1Dataset(VisionDataset):
         for target in sorted(class_to_idx.keys()):
             d = os.path.join(rootdir, target, subdir)
 
-            if not os.path.isdir(d):
-                print(f'DATA: {d} is not dir -- continue')
-                continue
+            assert os.path.isdir(d)
 
             for root, _, fnames in sorted(os.walk(d)):
                 for fname in sorted(fnames):
                     path = os.path.join(root, fname)
 
                     if is_valid_file(path):
-                        target_class = class_to_idx[target]
-                        target_chars = torch.tensor(
-                            [self.vocab.token2idx(token) for token in target])
-                        item = (path, target_class, target_chars)
-                        samples.append(item)
+
+                        if self.vocab is None:
+                            # if no vocab then this is a classification task
+                            label = class_to_idx[target]
+                        else:
+                            # else look up char indices from vocab
+                            label = torch.tensor([
+                                self.vocab.token2idx(token) for token in target
+                            ])
+
+                        samples.append((path, label))
 
         return samples
 
     def __getitem__(self, idx):
-        path, target_class, target_chars = self.samples[idx]
+        path, target = self.samples[idx]
         sample = self.loader(path)
 
         assert len(sample) == 29
 
         if self.transform is not None:
             sample = self.transform(sample)
-
-        target = target_class if self.classification else target_chars
 
         return sample, target
 

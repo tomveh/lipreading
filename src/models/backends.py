@@ -35,12 +35,13 @@ class ConvolutionalBackend(nn.Module):
 
 
 class TransformerBackend(nn.Module):
-    def __init__(self, n_vocab, d_model, frontend):
+    def __init__(self, vocab, d_model, frontend):
         super().__init__()
+        self.vocab = vocab
         self.frontend = frontend
-        self.embedding = nn.Embedding(n_vocab, d_model)
+        self.embedding = nn.Embedding(len(vocab), d_model)
         self.transformer = nn.Transformer(d_model=d_model)
-        self.linear = nn.Linear(d_model, n_vocab)
+        self.linear = nn.Linear(d_model, len(vocab))
 
     def forward(self, x, y):
 
@@ -67,11 +68,11 @@ class TransformerBackend(nn.Module):
 
         return pred
 
-    def inference(self, x, vocab):
+    def inference(self, x):
         with torch.no_grad():
 
-            sos = vocab['<sos>']
-            pad = vocab['<pad>']
+            sos = self.vocab.token2idx('<sos>')
+            pad = self.vocab.token2idx('<pad>')
 
             if self.frontend:
                 x = self.frontend(x)
