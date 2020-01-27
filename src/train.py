@@ -41,12 +41,9 @@ class TransformerModel(pl.LightningModule):
 
         # get target values from the training target by shifting by 1:
         # drop <sos> and add <pad> to the end of every sequence
-        target = torch.cat([
-            y[:, 1:],
-            torch.tensor([self.vocab.token2idx('<pad>')] * batch_size).view(
-                batch_size, 1).type_as(y)
-        ],
-                           dim=1)
+        pad_column = torch.tensor([self.vocab.token2idx('<pad>')] *
+                                  batch_size).view(batch_size, 1).type_as(y)
+        target = torch.cat([y[:, 1:], pad_column], dim=1)
 
         loss = self.loss_fn(pred, target)
 
@@ -64,7 +61,7 @@ class TransformerModel(pl.LightningModule):
                     self.logger.experiment.add_histogram(
                         f'grad-{name}',
                         param.grad,
-                        global_selftep=self.global_step)
+                        global_step=self.global_step)
                     self.logger.experiment.add_histogram(
                         f'weight-{name}',
                         param.data,
@@ -310,7 +307,8 @@ def main(hparams):
         accumulate_grad_batches=hparams.accumulate_grad_batches,
         fast_dev_run=debug,
         max_nb_epochs=hparams.max_epochs,
-        track_grad_norm=hparams.track_grad_norm)
+        track_grad_norm=hparams.track_grad_norm,
+        gradient_clip_val=1)
 
     if hparams.frontend_weights:
         print('loading weights from a pretrained model...')
@@ -323,11 +321,10 @@ def main(hparams):
     trainer.fit(module)
     trainer.test()
 
+    weights_path = base_path / "weights"
+    weights_path.mkdir(parents=True, exist_ok=True)
+    torch.save(module.model.state_dict(), weights_path / 'model_weights.pt')
 
-#     path = os.path.join(trainer.logger.save_dir, 'lightning_logs',
-#                         f'version_{trainer.logger.version}',
-#                         'frontend-weights.pt')
-#     torch.save(module.model.frontend.state_dict(), path)
 
 if __name__ == '__main__':
     parser = ArgumentParser(add_help=False)
