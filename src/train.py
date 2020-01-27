@@ -5,7 +5,6 @@ from argparse import ArgumentParser
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from pytorch_lightning.logging import TestTubeLogger
-import torchvision
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -166,13 +165,21 @@ class TransformerModel(pl.LightningModule):
 
     @pl.data_loader
     def train_dataloader(self):
-        train_ds = data.LRW1Dataset(root=self.hparams.data_root,
-                                    subdir='train',
-                                    loader=lambda path: torchvision.io.
-                                    read_video(path, pts_unit='sec')[0],
-                                    transform=data.train_transform(),
-                                    easy=self.hparams.easy,
-                                    vocab=self.vocab)
+        if 'lrw1' in hparams.data_root:
+            train_ds = data.LRW1Dataset(root=self.hparams.data_root,
+                                        subdir='train',
+                                        loader=data.video_loader,
+                                        transform=data.train_transform(),
+                                        easy=self.hparams.easy,
+                                        vocab=self.vocab)
+        elif 'lrs2' in hparams.data_root:
+            train_ds = data.LRS2PretrainDataset(
+                root=self.hparams.data_root,
+                loader=data.video_loader,
+                vocab=self.vocab,
+                transform=data.train_transform())
+        else:
+            raise RuntimeError("unknown data_root")
 
         train_dl = DataLoader(train_ds,
                               batch_size=self.hparams.batch_size,
@@ -187,13 +194,21 @@ class TransformerModel(pl.LightningModule):
 
     @pl.data_loader
     def val_dataloader(self):
-        val_ds = data.LRW1Dataset(root=self.hparams.data_root,
-                                  subdir='val',
-                                  loader=lambda path: torchvision.io.
-                                  read_video(path, pts_unit='sec')[0],
-                                  transform=data.val_transform(),
-                                  easy=self.hparams.easy,
-                                  vocab=self.vocab)
+        if 'lrw1' in hparams.data_root:
+            val_ds = data.LRW1Dataset(root=self.hparams.data_root,
+                                      subdir='val',
+                                      loader=data.video_loader,
+                                      transform=data.val_transform(),
+                                      easy=self.hparams.easy,
+                                      vocab=self.vocab)
+        elif 'lrs2' in hparams.data_root:
+            val_ds = data.LRS2TestTrainDataset('test',
+                                               root=self.hparams.data_root,
+                                               loader=data.video_loader,
+                                               vocab=self.vocab,
+                                               transform=data.val_transform())
+        else:
+            raise RuntimeError("unknown data_root")
 
         val_dl = DataLoader(val_ds,
                             batch_size=2 * self.hparams.batch_size,
@@ -208,15 +223,24 @@ class TransformerModel(pl.LightningModule):
 
     @pl.data_loader
     def test_dataloader(self):
-        test_ds = data.LRW1Dataset(root=self.hparams.data_root,
-                                   subdir='test',
-                                   loader=lambda path: torchvision.io.
-                                   read_video(path, pts_unit='sec')[0],
-                                   transform=data.val_transform(),
-                                   easy=self.hparams.easy,
-                                   vocab=self.vocab)
+        if 'lrw1' in self.hparams.data_root:
+            test_ds = data.LRW1Dataset(root=self.hparams.data_root,
+                                       subdir='test',
+                                       loader=data.video_loader,
+                                       transform=data.val_transform(),
+                                       easy=self.hparams.easy,
+                                       vocab=self.vocab)
+        elif 'lrs2' in self.hparams.data_root:
+            test_ds = data.LRS2TestTrainDataset('test',
+                                                root=self.hparams.data_root,
+                                                loader=data.video_loader,
+                                                vocab=self.vocab,
+                                                transform=data.val_transform())
+        else:
+            raise RuntimeError('unexpected hparams.data_root',
+                               self.hparams.data_root)
 
-        test_ds = DataLoader(test_ds,
+        test_dl = DataLoader(test_ds,
                              batch_size=2 * self.hparams.batch_size,
                              shuffle=True,
                              collate_fn=lambda x: data.pad_collate(
@@ -225,7 +249,7 @@ class TransformerModel(pl.LightningModule):
                                  sos_value=self.vocab.token2idx('<sos>')),
                              num_workers=self.hparams.workers)
 
-        return test_ds
+        return test_dl
 
     @staticmethod
     def add_model_specific_args(parent_parser):

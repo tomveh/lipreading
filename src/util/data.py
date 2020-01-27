@@ -8,8 +8,11 @@ import util.transforms as t
 import torchvision.transforms as transforms
 
 
-def video_loader(path):
-    video, audio, info = torchvision.io.read_video(path, pts_unit='sec')
+def video_loader(path, start_pts=0, end_pts=None):
+    video, audio, info = torchvision.io.read_video(path,
+                                                   start_pts=start_pts,
+                                                   end_pts=end_pts,
+                                                   pts_unit='sec')
     return video
 
 
@@ -45,7 +48,15 @@ def val_transform():
 def pad_collate(samples, padding_value, sos_value):
     x, y = zip(*samples)
 
+    # x is a list of 1(=channel) x batch x 112 x 112
+    # but pad_sequence only works if the first batch is the seq len
+    x = [x_.squeeze(0) for x_ in x]
+
     collated = torch.nn.utils.rnn.pad_sequence(x, batch_first=True)
+
+    # add back the channel dimension
+    collated = collated.unsqueeze(1)
+
     collated_y = torch.nn.utils.rnn.pad_sequence(y,
                                                  batch_first=True,
                                                  padding_value=padding_value)
@@ -193,6 +204,53 @@ class LRS2PretrainDataset(VisionDataset):
 
         return video, torch.tensor(
             [self.vocab.token2idx(char) for char in ' '.join(utterance)])
+
+
+class LRS2TestTrainDataset(VisionDataset):
+    def __init__(self, test_or_train, root, loader, vocab, transform=None):
+        super().__init__(root, transform=transform)
+        assert test_or_train in ['train', 'test']
+        self.train = test_or_train == 'train'
+        self.loader = loader
+        self.vocab = vocab
+        self.samples = self._make_dataset(root)
+
+    def _make_dataset(self, root):
+        filename = 'train.txt' if self.train else 'test.txt'
+
+        with open(os.path.join(root, filename), 'r') as f:
+            samples = []
+
+            for line in f.readlines():
+                path = line.split()[0].strip()
+                mp4_path, txt_path = [
+                    os.path.join(root, 'mvlrs_v1', 'main', path + suffix)
+                    for suffix in ['.mp4', '.txt']
+                ]
+
+                with open(txt_path, 'r') as f:
+                    lines = f.readlines()
+                    text = ' '.join(lines[0].split()[1:])
+                    indices = torch.tensor(
+                        [self.vocab.token2idx(token) for token in text])
+                    sample = (mp4_path, indices)
+
+                samples.append(sample)
+
+        return samples
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        path, indices = self.samples[idx]
+
+        video = self.loader(path)
+
+        if self.transform is not None:
+            video = self.transform(video)
+
+        return video, indices
 
 
 class LRW1Dataset(VisionDataset):
