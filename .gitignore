@@ -1,3 +1,6 @@
+.DS_Store
 lightning_logs/
 __pycache__/
 *.out
+*.ipynb
+.ipynb_checkpoints/
