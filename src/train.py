@@ -10,22 +10,19 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
+from models.models import TransformerModel
 from util import data
-from models.frontend import VisualFrontEnd
-from models.backends import TransformerBackend
 
 
-class TransformerModel(pl.LightningModule):
+class TransformerModule(pl.LightningModule):
     def __init__(self, hparams):
         super().__init__()
         self.hparams = hparams
-        frontend = VisualFrontEnd(out_channels=hparams.d_model,
-                                  resnet='resnet18')
 
         self.vocab = data.CharVocab(sos=True)
-        self.model = TransformerBackend(vocab=self.vocab,
-                                        d_model=hparams.d_model,
-                                        frontend=frontend)
+        self.model = TransformerModel(self.vocab,
+                                      resnet='resnet18',
+                                      nh=self.hparams.d_model)
         self.loss_fn = nn.CrossEntropyLoss()
         self.text_summary = True
 
@@ -269,7 +266,7 @@ class TransformerModel(pl.LightningModule):
 
 
 def main(hparams):
-    module = TransformerModel(hparams)
+    module = TransformerModule(hparams)
 
     save_dir = Path(__file__).parent.parent.absolute() / 'lightning_logs'
     experiment_name = 'train'
@@ -336,7 +333,7 @@ if __name__ == '__main__':
     parser.add_argument('--checkpoint', default='', type=str)
     parser.add_argument('--debug', default=0, type=int)
     parser.add_argument('--frontend_weights', default='', type=str)
-    parser = TransformerModel.add_model_specific_args(parser)
+    parser = TransformerModule.add_model_specific_args(parser)
 
     hparams = parser.parse_args()
     main(hparams)
