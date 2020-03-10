@@ -4,27 +4,19 @@ from argparse import ArgumentParser
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.logging import TestTubeLogger
-import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
 from models.models import PretrainNet
-from util import data
+from utils import data
 
 
-class LipreadingClassifier(pl.LightningModule):
+class VisualPretrainModule(pl.LightningModule):
     def __init__(self, hparams):
         super().__init__()
         self.hparams = hparams
-        self.model = PretrainNet(hparams.resnet, nh=hparams.n_hidden)
-        self.__init_weights()
-
-    def __init_weights(self):
-        for name, module in self.model.named_modules():
-            if 'Conv2d' in module.__class__.__name__:
-                nn.init.kaiming_uniform_(module.weight.data)
+        self.model = PretrainNet(resnet=hparams.resnet, nh=hparams.n_hidden)
 
     def forward(self, x):
         return self.model((x))
@@ -123,18 +115,9 @@ class LipreadingClassifier(pl.LightningModule):
 
     @pl.data_loader
     def train_dataloader(self):
-        if self.hparams.augment >= 1:
-            transform = data.train_transform()
-        elif self.hparams.augment < 1:
-            transform = data.val_transform()
-        else:
-            raise RuntimeError(
-                f'invalid hparams.augment value {self.hparams.augment}')
-
         train_ds = data.LRW1Dataset(root=self.hparams.data_root,
                                     subdir='train',
-                                    loader=data.video_loader,
-                                    transform=transform)
+                                    transform=data.train_transform())
 
         train_dl = DataLoader(train_ds,
                               batch_size=self.hparams.batch_size,
@@ -147,12 +130,11 @@ class LipreadingClassifier(pl.LightningModule):
     def val_dataloader(self):
         val_ds = data.LRW1Dataset(root=self.hparams.data_root,
                                   subdir='val',
-                                  loader=data.video_loader,
                                   transform=data.val_transform())
 
         val_dl = DataLoader(val_ds,
                             batch_size=2 * self.hparams.batch_size,
-                            shuffle=True,
+                            shuffle=False,
                             num_workers=self.hparams.workers)
 
         return val_dl
@@ -162,12 +144,11 @@ class LipreadingClassifier(pl.LightningModule):
 
         test_ds = data.LRW1Dataset(root=self.hparams.data_root,
                                    subdir='test',
-                                   loader=data.video_loader,
                                    transform=data.val_transform())
 
         test_dl = DataLoader(test_ds,
                              batch_size=2 * self.hparams.batch_size,
-                             shuffle=True,
+                             shuffle=False,
                              num_workers=self.hparams.workers)
 
         return test_dl
@@ -185,7 +166,6 @@ class LipreadingClassifier(pl.LightningModule):
 
         # data
         parser.add_argument('--data_root', type=str, required=True)
-        parser.add_argument('--augment', type=int, default=1)
 
         # training
         parser.add_argument('--workers', default=16, type=int)
@@ -194,15 +174,14 @@ class LipreadingClassifier(pl.LightningModule):
 
 
 def main(hparams):
-    module = LipreadingClassifier(hparams)
+    module = VisualPretrainModule(hparams)
 
-    save_dir = Path('.') / 'lightning_logs'
+    save_dir = Path(__file__).parent.parent.absolute() / 'lightning_logs'
     experiment_name = 'pretrain'
     version = int(hparams.checkpoint) if hparams.checkpoint else None
 
     logger = TestTubeLogger(save_dir=save_dir,
                             name=experiment_name,
-                            debug=hparams.fast_dev_run > 0,
                             version=version,
                             description=hparams.description)
 
@@ -232,13 +211,6 @@ def main(hparams):
     trainer.fit(module)
     trainer.test()
 
-    # TODO: is there some easy way to get model weights from pl checkpoint
-    weights_path = base_path / "weights"
-    weights_path.mkdir(parents=True, exist_ok=True)
-
-    torch.save(module.model.frontend.state_dict(),
-               weights_path / 'frontend_weights.pt')
-
 
 if __name__ == '__main__':
     parser = ArgumentParser(add_help=False)
@@ -248,7 +220,7 @@ if __name__ == '__main__':
     parser.add_argument('--weight_hist', default=0, type=int)
     parser.add_argument('--max_epochs', default=100, type=int)
     parser.add_argument('--checkpoint', type=str)
-    parser = LipreadingClassifier.add_model_specific_args(parser)
+    parser = VisualPretrainModule.add_model_specific_args(parser)
 
     hparams = parser.parse_args()
 
