@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from .resnet import resnet18, resnet34
 
 
-class VisualFrontEnd(nn.Module):
+class VisualFrontend(nn.Module):
     def __init__(self, out_channels, resnet):
         super().__init__()
         self.conv3d = nn.Conv3d(1,
@@ -34,9 +34,9 @@ class VisualFrontEnd(nn.Module):
             self.bn2 = nn.BatchNorm1d(512)
 
     def forward(self, x):
-        x = F.relu(self.bn1(self.conv3d(x)))  # batch x 64 x 29 x 56 x 56
+        x = F.relu(self.bn1(self.conv3d(x)))  # batch x 64 x seq_len x 56 x 56
 
-        x = self.max_pool3d(x)  # batch x 64 x 29 x 28 x 28
+        x = self.max_pool3d(x)  # batch x 64 x seq_len x 28 x 28
 
         # transpose channel and depth
         x = x.transpose(1, 2).contiguous()
@@ -45,16 +45,17 @@ class VisualFrontEnd(nn.Module):
         batch, depth, channel, height, width = x.shape
         x = x.view(batch * depth, channel, height, width)
 
-        x = self.resnet(x)  # batch*29 x 512 x 4 x 4
+        x = self.resnet(x)  # batch*seq_len x 512 x 4 x 4
 
-        x = self.adaptiveAvgPool2d(x).squeeze()  # batch*29 x 512
+        x = self.adaptiveAvgPool2d(x).squeeze(dim=-1).squeeze(
+            dim=-1)  # batch*seq_len x 512
 
         # Apply linear if output dim != 512
         if hasattr(self, 'linear'):
-            x = self.linear(x)  # batch*29 x out_channels
+            x = self.linear(x)  # batch*seq_len x out_channels
 
         x = self.bn2(x)
 
-        x = x.view(batch, depth, -1)  # batch x 29 x out_channels
+        x = x.view(batch, depth, -1)  # batch x seq_len x out_channels
 
         return x
