@@ -3,7 +3,7 @@ from argparse import ArgumentParser
 
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
-from pytorch_lightning.logging import TestTubeLogger
+from pytorch_lightning.logging import TensorBoardLogger
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
@@ -174,26 +174,29 @@ class VisualPretrainModule(pl.LightningModule):
 
 
 def main(hparams):
+    print('hparams', hparams)
     module = VisualPretrainModule(hparams)
 
     save_dir = Path(__file__).parent.parent.absolute() / 'lightning_logs'
     experiment_name = 'pretrain'
     version = int(hparams.checkpoint) if hparams.checkpoint else None
+    print('version is', version)
 
-    logger = TestTubeLogger(save_dir=save_dir,
-                            name=experiment_name,
-                            version=version,
-                            description=hparams.description)
+    logger = TensorBoardLogger(save_dir=save_dir,
+                               name=experiment_name,
+                               version=version)
+    _ = logger.experiment  # create log dir
 
     base_path = save_dir / experiment_name / \
-        f'version_{logger.experiment.version}'
+        f'version_{logger.version}'
 
     early_stopping = EarlyStopping(monitor='val_acc',
                                    patience=3,
                                    verbose=True,
                                    mode='max')
 
-    checkpoint_callback = ModelCheckpoint(filepath=base_path / 'checkpoints',
+    checkpoint_callback = ModelCheckpoint(filepath=base_path /
+                                          'model_checkpoints',
                                           monitor='val_acc',
                                           mode='max',
                                           verbose=True)
@@ -205,7 +208,7 @@ def main(hparams):
                          gpus=1,
                          log_gpu_memory='all',
                          fast_dev_run=hparams.fast_dev_run,
-                         max_nb_epochs=hparams.max_epochs,
+                         max_epochs=hparams.max_epochs,
                          track_grad_norm=hparams.track_grad_norm)
 
     trainer.fit(module)
@@ -219,7 +222,7 @@ if __name__ == '__main__':
     parser.add_argument('--fast_dev_run', default=0, type=int)
     parser.add_argument('--weight_hist', default=0, type=int)
     parser.add_argument('--max_epochs', default=100, type=int)
-    parser.add_argument('--checkpoint', type=str)
+    parser.add_argument('--checkpoint', type=str, default='')
     parser = VisualPretrainModule.add_model_specific_args(parser)
 
     hparams = parser.parse_args()
