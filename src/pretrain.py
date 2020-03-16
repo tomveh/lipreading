@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from argparse import ArgumentParser
 
@@ -115,9 +116,23 @@ class VisualPretrainModule(pl.LightningModule):
 
     @pl.data_loader
     def train_dataloader(self):
-        train_ds = data.LRW1Dataset(root=self.hparams.data_root,
+        if self.hparams.dataset == 'lrw1':
+            train_ds = data.LRW1Dataset(root=self.hparams.data_root,
+                                        subdir='train',
+                                        transform=data.train_transform())
+        elif self.hparams.dataset == 'pretrain':
+            lrw1 = data.LRW1Dataset(root=os.path.join(self.hparams.data_root,
+                                                      'lrw1'),
                                     subdir='train',
-                                    transform=data.train_transform())
+                                    transform=data.val_transform())
+            lrs2 = data.LRS2PretrainWordDataset(os.path.join(
+                self.hparams.data_root, 'lrs2'),
+                                                classes=lrw1.classes,
+                                                transform=data.val_transform())
+
+            train_ds = lrw1 + lrs2
+        else:
+            raise RuntimeError('unknown dataset')
 
         train_dl = DataLoader(train_ds,
                               batch_size=self.hparams.batch_size,
@@ -166,6 +181,7 @@ class VisualPretrainModule(pl.LightningModule):
 
         # data
         parser.add_argument('--data_root', type=str, required=True)
+        parser.add_argument('--dataset', type=str, default='lrw1')
 
         # training
         parser.add_argument('--workers', default=16, type=int)

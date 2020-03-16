@@ -158,14 +158,14 @@ class LRW1Dataset(VisionDataset):
 
     def __getitem__(self, idx):
         path, target = self.samples[idx]
-        sample = video_loader(path)
+        video = video_loader(path)
 
-        assert len(sample) == 29
+        assert len(video) == 29
 
         if self.transform is not None:
-            sample = self.transform(sample)
+            video = self.transform(video)
 
-        return sample, target
+        return video, target
 
     def __len__(self):
         return len(self.samples)
@@ -251,6 +251,62 @@ class PretrainLabel():
         sampled = utterances[randrange(0, len(utterances))]
 
         return sampled['utterance'], (sampled['start'], sampled['end'])
+
+
+class LRS2PretrainWordDataset(VisionDataset):
+    def __init__(self, root, classes, vocab=None, transform=None):
+        super().__init__(root, transform=transform)
+        self.vocab = vocab
+        self.classes = classes
+        self.samples = self._make_dataset(root)
+        self.class_to_idx = {self.classes[i]: i for i in range(len(classes))}
+
+    def _make_dataset(self, root):
+        with open(os.path.join(root, 'pretrain.txt'), 'r') as f:
+            samples = []
+
+            for line in f.readlines():
+                file_prefix = os.path.join(root, 'mvlrs_v1', 'pretrain',
+                                           line.strip())
+
+                with open(file_prefix + '.txt', 'r') as f2:
+                    for line in f2.readlines()[4:]:
+                        word, start, end, _ = line.split()
+
+                        if word not in self.classes:
+                            continue
+
+                        if self.vocab is None:
+                            target = self.class_to_idx[word]
+                        else:
+                            target = torch.cat([
+                                torch.tensor([self.vocab.token2idx('<sos>')]),
+                                torch.tensor([
+                                    self.vocab.token2idx(token)
+                                    for token in word
+                                ]),
+                                torch.tensor([self.vocab.token2idx('<eos>')])
+                            ])
+
+                        if word in self.classes:
+                            sample = (file_prefix, target, (float(start),
+                                                            float(end)))
+                            samples.append(sample)
+
+            return samples
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        file_prefix, target, (start, end) = self.samples[idx]
+
+        video = video_loader(file_prefix + '.mp4', start, end)
+
+        if self.transform is not None:
+            video = self.transform(video)
+
+        return video, target
 
 
 class LRS2PretrainDataset(VisionDataset):
