@@ -9,19 +9,23 @@ class Normalize:
         return (tensor - mean) / std
 
 
-class RandomFrameDrop:
-    def __init__(self, p):
-        self.p = p
+# class RandomFrameDrop:
+#     def __init__(self, p):
+#         self.p = p
 
-    def __call__(self, tensor, padding='end'):
-        t = tensor[torch.rand(len(tensor)) > self.p]
+#     def __call__(self, tensor, padding='end'):
+#         # this is a T-length tensor (array) initially filled with
+#         # random values from [0, 1) and then compared to p
+#         # (=0.05). Ones mean that the frame will be kept and 0 means
+#         # that the frame is dropped
+#         t = tensor[torch.rand(len(tensor)) > self.p]
 
-        if padding == 'end':
-            padded = torch.zeros_like(tensor)
-            padded[:len(t)] = t
-            return padded
+#         if padding == 'end':
+#             padded = torch.zeros_like(tensor)
+#             padded[:len(t)] = t
+#             return padded
 
-        return t
+#         return t
 
 
 class CenterCrop():

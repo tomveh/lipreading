@@ -25,7 +25,8 @@ def video_loader(path, start_pts=0, end_pts=None):
 def train_transform():
     return transforms.Compose([
         lambda t: t.permute(0, 3, 1, 2),
-        t.RandomFrameDrop(0.05), torch.unbind,
+        # t.RandomFrameDrop(0.05),
+        transforms.Lambda(torch.unbind),
         t.Map(
             transforms.Compose(
                 [transforms.ToPILImage(),
@@ -33,20 +34,25 @@ def train_transform():
         t.CenterCrop([122, 122]),
         t.RandomCrop([112, 112]),
         t.RandomHorizontalFlip(),
-        t.Map(transforms.ToTensor()), torch.stack, lambda t: t.transpose(0, 1),
+        t.Map(transforms.ToTensor()),
+        transforms.Lambda(torch.stack),
+        transforms.Lambda(lambda t: t.transpose(0, 1)),
         t.Normalize()
     ])
 
 
 def val_transform():
     return transforms.Compose([
-        lambda t: t.permute(0, 3, 1, 2), torch.unbind,
+        transforms.Lambda(lambda t: t.permute(0, 3, 1, 2)),
+        transforms.Lambda(torch.unbind),
         t.Map(
             transforms.Compose(
                 [transforms.ToPILImage(),
                  transforms.Grayscale()])),
         t.CenterCrop([112, 112]),
-        t.Map(transforms.ToTensor()), torch.stack, lambda t: t.transpose(0, 1),
+        t.Map(transforms.ToTensor()),
+        transforms.Lambda(torch.stack),
+        transforms.Lambda(lambda t: t.transpose(0, 1)),
         t.Normalize()
     ])
 
