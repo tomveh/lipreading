@@ -33,6 +33,13 @@ class VisualFrontend(nn.Module):
         else:
             self.bn2 = nn.BatchNorm1d(512)
 
+        self._init_weights()
+
+    def _init_weights(self):
+        for name, module in self.resnet.named_modules():
+            if 'Conv2d' in module.__class__.__name__:
+                nn.init.kaiming_uniform_(module.weight.data)
+
     def forward(self, x):
         x = F.relu(self.bn1(self.conv3d(x)))  # batch x 64 x seq_len x 56 x 56
 

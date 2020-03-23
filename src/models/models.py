@@ -29,13 +29,6 @@ class PretrainNet(nn.Module):
         self.frontend = VisualFrontend(out_channels=nh, resnet=resnet)
         self.backend = ConvolutionalBackend(nh, 500)
 
-        self._init_weights()
-
-    def _init_weights(self):
-        for name, module in self.backend.named_modules():
-            if 'Conv2d' in module.__class__.__name__:
-                nn.init.kaiming_uniform_(module.weight.data)
-
     def forward(self, x):
         x = self.frontend(x)
         x = self.backend(x)

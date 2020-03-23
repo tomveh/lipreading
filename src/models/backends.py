@@ -49,7 +49,9 @@ class TransformerBackend(nn.Module):
         self._init_weights()
 
     def _init_weights(self):
-        pass
+        for name, module in self.named_modules():
+            if 'Conv1d' in module.__class__.__name__:
+                nn.init.kaiming_uniform_(module.weight.data)
 
     def forward(self, x, y=None):
         if self.training and y is not None:
