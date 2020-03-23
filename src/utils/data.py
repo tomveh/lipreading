@@ -57,6 +57,16 @@ def val_transform():
     ])
 
 
+def zero_pad(samples):
+    x, y = zip(*samples)
+
+    padded = torch.nn.utils.rnn.pad_sequence(x,
+                                             batch_first=True,
+                                             padding_value=0)
+
+    return padded.unsqueeze(1), torch.stack(y)
+
+
 def pad_collate(samples, padding_value):
     """Add padding to samples to make them have equal length
 
@@ -146,7 +156,7 @@ class LRW1Dataset(VisionDataset):
 
                         if self.vocab is None:
                             # if no vocab then this is a classification task
-                            label = class_to_idx[target]
+                            label = torch.tensor(class_to_idx[target])
                         else:
                             # else look up indices and add sos + eos
                             label = torch.cat([
@@ -170,6 +180,8 @@ class LRW1Dataset(VisionDataset):
 
         if self.transform is not None:
             video = self.transform(video)
+
+        video = video.squeeze(0)
 
         return video, target
 
@@ -264,8 +276,8 @@ class LRS2PretrainWordDataset(VisionDataset):
         super().__init__(root, transform=transform)
         self.vocab = vocab
         self.classes = classes
-        self.samples = self._make_dataset(root)
         self.class_to_idx = {self.classes[i]: i for i in range(len(classes))}
+        self.samples = self._make_dataset(root)
 
     def _make_dataset(self, root):
         with open(os.path.join(root, 'pretrain.txt'), 'r') as f:
@@ -279,11 +291,16 @@ class LRS2PretrainWordDataset(VisionDataset):
                     for line in f2.readlines()[4:]:
                         word, start, end, _ = line.split()
 
-                        if word not in self.classes:
+                        start, end = float(start), float(end)
+
+                        # skip if target is not in the given list of
+                        # words (500 LRW1 words) or if the clip is too
+                        # long
+                        if word not in self.classes or end - start > 1.5:
                             continue
 
                         if self.vocab is None:
-                            target = self.class_to_idx[word]
+                            target = torch.tensor(self.class_to_idx[word])
                         else:
                             target = torch.cat([
                                 torch.tensor([self.vocab.token2idx('<sos>')]),
@@ -295,8 +312,7 @@ class LRS2PretrainWordDataset(VisionDataset):
                             ])
 
                         if word in self.classes:
-                            sample = (file_prefix, target, (float(start),
-                                                            float(end)))
+                            sample = (file_prefix, target, (start, end))
                             samples.append(sample)
 
             return samples
@@ -311,6 +327,8 @@ class LRS2PretrainWordDataset(VisionDataset):
 
         if self.transform is not None:
             video = self.transform(video)
+
+        video = video.squeeze(0)
 
         return video, target
 
@@ -377,7 +395,7 @@ class LRS2PretrainDataset(VisionDataset):
 # Validating seq2seq pretraining is difficult with the real validation
 # data since pretraining is done with curriculum learning whereas
 # validation sequences are fixed length (and word boundaries are not
-# known). Therefore pretrain dataset is further spit into train and
+# known). Therefore pretrain dataset is further split into train and
 # val subsets to test seq2seq architecture and hyperparams
 
 
