@@ -8,6 +8,7 @@ from torch.utils.data import DataLoader, Dataset
 
 import utils.data as data
 from models.frontend import VisualFrontend
+from pretrain import VisualPretrainModule
 
 
 class LRS2Dataset(Dataset):
@@ -86,7 +87,15 @@ def generate_features(root, model_path=None, device='cuda'):
     model = VisualFrontend(out_channels=512, resnet='resnet18').to(device)
 
     if model_path:
-        model.load_state_dict(torch.load(model_path))
+        if model_path.endswith('.pt'):
+            model.load_state_dict(torch.load(model_path))
+        elif model_path.endswith('.ckpt'):
+            module = VisualPretrainModule.load_from_checkpoint(model_path)
+            model.load_state_dict(module.model.frontend.state_dict())
+        else:
+            raise RuntimeError('unknown model_path filetype',
+                               model_path.split('.')[-1])
+
         print('loaded model from', model_path)
 
     model.eval()
@@ -132,6 +141,6 @@ if __name__ == '__main__':
 
     params = parser.parse_args()
 
-    root = Path(params.root) / params.ds
+    root = Path(params.root, params.ds)
 
     generate_features(root, model_path=params.model_path, device=params.device)
