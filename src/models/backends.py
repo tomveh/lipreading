@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -88,3 +89,68 @@ class TransformerBackend(nn.Module):
 
         else:
             raise RuntimeError('not sure if train or eval')
+
+    def greedy(self, x, device='cuda'):
+        N = x.shape[0]
+
+        sos = self.vocab.token2idx('<sos>')
+
+        decoded = torch.tensor([sos] * N).reshape(N, 1).to(device)
+
+        # shape (N, 1) indicating if sequence is finished
+        done = decoded == self.vocab.token2idx('<eos>')
+
+        src = x.transpose(0, 1)  # max_seq_len, batch, d_model
+        src_key_padding_mask = x.sum(
+            dim=-1) == 0  # pad input if all d_model dim values are 0
+
+        max_len = 100
+
+        for _ in range(max_len):
+            tgt = self.embedding(decoded).transpose(0, 1).contiguous()
+            # shape: (T, N)
+
+            tgt_key_padding_mask = decoded == self.vocab.token2idx('<pad>')
+            # shape: (N, T)
+
+            # not allowed to look ahead
+            tgt_mask = self.transformer.generate_square_subsequent_mask(
+                len(tgt)).type_as(tgt_key_padding_mask)
+
+            out = self.transformer(src,
+                                   tgt,
+                                   tgt_mask=tgt_mask,
+                                   src_key_padding_mask=src_key_padding_mask,
+                                   tgt_key_padding_mask=tgt_key_padding_mask)
+
+            pred = self.linear(out)
+            # shape: (seq_len x batch_size x n_vocab)
+
+            greedy_pred = pred.argmax(dim=2)[-1].reshape(N, 1)
+
+            # replace prediction with <pad> if eos has been predicted earlier
+            # greedy_pred[done] = self.vocab.token2idx('<pad>')
+
+            done = done | (
+                greedy_pred.view(-1) == self.vocab.token2idx('<eos>'))
+
+            decoded = torch.cat([decoded, greedy_pred], dim=1)
+
+            if done.all():
+                break
+
+        decoded_strings = []
+
+        # special = [
+        #     self.vocab.token2idx(token)
+        #     for token in ['<sos>', '<pad>', '<eos>']
+        # ]
+
+        for line in decoded:
+            decoded_strings.append(''.join([
+                self.vocab.idx2token(idx)
+                for idx in line  # if idx not in special
+            ]).replace('<sos>', '^').replace('<eos>',
+                                             '$').replace('<pad>', '#'))
+
+        return decoded_strings

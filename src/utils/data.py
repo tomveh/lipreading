@@ -413,21 +413,30 @@ class LRS2PretrainValSplit(LRS2PretrainDataset):
 
 class LRS2FeatureDataset():
     def __init__(self, root, vocab):
-        self.max_seq_len = 1
+        self.max_seq_len = 2
         self.vocab = vocab
         self.samples = self._make_dataset(root)
         self.fps = 25
+
+    # def increase_seq_len(self):
+    #     self.max_seq_len += 1
+    #     return self.max_seq_len
 
     def _make_dataset(self, root):
         with open(Path(root, 'pretrain.txt'), 'r') as f:
             samples = []
 
             for line in f.readlines():
+                # TODO: change this line?
                 path = Path(root, 'mvlrs_v1', 'pretrain_features',
                             line.strip() + '.pt')
 
                 if path.exists():
-                    samples.append(str(path))
+                    features, label = torch.load(path)
+
+                    # if max seq len is 1 then we have to skip samples where no contiguous words can be found
+                    if 2 in label.all_utterances.keys():
+                        samples.append(str(path))
                 else:
                     print(f'{str(path)} not found')
 
@@ -440,7 +449,7 @@ class LRS2FeatureDataset():
         path = self.samples[idx]
 
         features, label = torch.load(path)
-        utterance, (start, end) = label.sample(self.max_seq_len)
+        utterance, (start, end) = label.sample(self.max_seq_len, min_length=2)
 
         first_frame = max(0, math.floor(start * self.fps))
         last_frame = min(features.shape[0], math.ceil(end * self.fps) + 1)

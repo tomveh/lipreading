@@ -5,12 +5,10 @@ import Levenshtein
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from pytorch_lightning.logging import TensorBoardLogger
-import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
-# from models.frontend import VisualFrontend
 from models.backends import TransformerBackend
 from utils import data
 
@@ -21,27 +19,29 @@ class Seq2SeqPretrainModule(pl.LightningModule):
         self.hparams = hparams
         self.vocab = data.CharVocab()
         self.model = TransformerBackend(self.vocab, nh=self.hparams.d_model)
-        # self.frontend = VisualFrontend(512, resnet='resnet18')
         self.loss_fn = nn.CrossEntropyLoss(
             reduction='mean', ignore_index=self.vocab.token2idx('<pad>'))
 
-    def _increase_seq_len(self):
-        a = self.train_ds.increase_seq_len()
-        b = self.val_ds.increase_seq_len()
+    # def _increase_seq_len(self):
 
-        assert a == b
+    #     if self.max_seq_len < 5:
+    #         a = self.train_ds.increase_seq_len()
+    #         b = self.val_ds.increase_seq_len()
 
-        self.max_seq_len = a
+    #         assert a == b
+
+    #     self.max_seq_len = a
 
     def on_epoch_start(self):
         # curriculum learning: increase maximum sequence length every
         # seq_inc_interval epochs
         # note that initial current_epoch is 0 so seq len is increased
         # from 1 to 2 before the training begins
-        if self.hparams.seq_inc_interval > 0 and \
-           self.current_epoch % self.hparams.seq_inc_interval == 0:
-            self._increase_seq_len()
-            print('max seq len is now', self.max_seq_len)
+        # if self.hparams.seq_inc_interval > 0 and \
+        #    self.current_epoch % self.hparams.seq_inc_interval == 0:
+        #     self._increase_seq_len()
+        #     print('max seq len is now', self.max_seq_len)
+        pass
 
     def on_batch_end(self):
         self.logger.experiment.add_scalar('max_sequence_length',
@@ -54,15 +54,17 @@ class Seq2SeqPretrainModule(pl.LightningModule):
     def training_step(self, batch, batch_nr):
         x, y, _ = batch
 
-        pred = self(x, y)
+        # drop the last column which contains pad or eos token because
+        # we don't care about the next token after eos (if the dropped
+        # token is pad and eos is still in the train sequence, then
+        # the corresponding target token will be pad and the loss will
+        # ignore the prediction matching the eos token)
+        y_ = y[:, :-1]
 
-        N = len(x)  # batch size
+        pred = self(x, y_)
 
-        pad = self.vocab.token2idx('<pad>')
-        pad_column = torch.tensor([pad] * N).view(N, 1).type_as(y)
-
-        # get target values from the training target by shifting by 1:
-        target = torch.cat([y[:, 1:], pad_column], dim=1)
+        # drop <sos> token from each batch
+        target = y[:, 1:]
 
         loss = self.loss_fn(pred, target)
 
@@ -71,7 +73,7 @@ class Seq2SeqPretrainModule(pl.LightningModule):
             'learning_rate': self.trainer.optimizers[0].param_groups[0]['lr']
         }
 
-        if self.global_step % 200 == 0:
+        if self.global_step % 5000 == 0:
             target_s = [
                 ''.join([self.vocab.idx2token(idx) for idx in line
                          ]).replace('<sos>',
@@ -86,7 +88,7 @@ class Seq2SeqPretrainModule(pl.LightningModule):
                 for line in pred.argmax(dim=1)
             ]
 
-            header = '| Real    | Prediction    |  \n |--- | --- |  \n'
+            header = '| Label | Pred |  \n | --- | --- |  \n'
 
             s = header + '  \n'.join([
                 f'{label} | {pred} |' for label, pred in zip(target_s, pred_s)
@@ -103,14 +105,18 @@ class Seq2SeqPretrainModule(pl.LightningModule):
                           lr=self.hparams.learning_rate,
                           weight_decay=self.hparams.weight_decay)
 
-        return opt
+        sched = optim.lr_scheduler.ReduceLROnPlateau(opt,
+                                                     factor=0.5,
+                                                     patience=100)
+
+        return [opt], [sched]
 
     def validation_step(self, batch, batch_nr):
         x, y, _ = batch
 
-        # x = self.frontend(x.unsqueeze(1))
+        predictions = self(x)
 
-        predictions = self.model(x)
+        greedys = self.model.greedy(x)
 
         special = [
             self.vocab.token2idx(x) for x in ['<pad>', '<sos>', '<eos>']
@@ -118,9 +124,8 @@ class Seq2SeqPretrainModule(pl.LightningModule):
 
         targets = [
             ''.join([
-                self.vocab.idx2token(idx) for idx in label_seq
-                if idx not in special
-            ]) for label_seq in y
+                self.vocab.idx2token(idx) for idx in targ if idx not in special
+            ]) for targ in y
         ]
 
         cers = []
@@ -129,8 +134,10 @@ class Seq2SeqPretrainModule(pl.LightningModule):
             cer = Levenshtein.distance(pred, target) / len(target)
             cers.append(cer)
 
-        pred_string = '  \n'.join(
-            [f'{label} | {pred}' for label, pred in zip(targets, predictions)])
+        pred_string = '  \n'.join([
+            f'{label} | {pred} | {greedy}'
+            for label, pred, greedy in zip(targets, predictions, greedys)
+        ])
 
         mean_cer = sum(cers) / len(cers)
 
@@ -139,9 +146,10 @@ class Seq2SeqPretrainModule(pl.LightningModule):
     def validation_end(self, outputs):
         val_loss_mean = 0
 
-        header = '| Real | Prediction | Greedy | \n | --- | --- | --- |  \n'
+        header = '| Real | Prediction | Greedy |  \n | --- | --- | --- |  \n'
 
-        s = header + '  \n'.join([output['pred_string'] for output in outputs])
+        s = header + '  \n'.join(
+            [output['pred_string'] for output in outputs[:10]])
 
         self.logger.experiment.add_text(tag='validation_predictions',
                                         text_string=s,
@@ -188,10 +196,11 @@ class Seq2SeqPretrainModule(pl.LightningModule):
 
         val_dl = DataLoader(
             val_ds,
-            batch_size=16,
+            batch_size=self.hparams.batch_size,
             collate_fn=lambda x: data.pad_collate(
                 x, padding_value=self.vocab.token2idx('<pad>')),
-            num_workers=self.hparams.workers)
+            num_workers=self.hparams.workers,
+            shuffle=True)
 
         return val_dl
 
@@ -220,7 +229,7 @@ def main(hparams):
     module = Seq2SeqPretrainModule(hparams)
 
     save_dir = Path(__file__).parent.parent.absolute() / 'lightning_logs'
-    experiment_name = 'train_test'
+    experiment_name = 'train'
     version = int(hparams.checkpoint) if hparams.checkpoint else None
 
     logger = TensorBoardLogger(save_dir=save_dir,
@@ -243,6 +252,7 @@ def main(hparams):
                                           verbose=True)
 
     trainer = pl.Trainer(
+        val_percent_check=0.1,
         logger=logger,
         early_stop_callback=early_stopping,
         checkpoint_callback=checkpoint_callback,
@@ -251,17 +261,10 @@ def main(hparams):
         print_nan_grads=True,
         accumulate_grad_batches=hparams.accumulate_grad_batches,
         fast_dev_run=0,
-        min_epochs=30,
+        min_epochs=hparams.min_epochs,
         max_epochs=hparams.max_epochs,
         track_grad_norm=hparams.track_grad_norm,
         gradient_clip_val=1)
-
-    # if hparams.frontend_weights:
-    #     print('loading weights from a pretrained model...')
-    #     module.frontend.load_state_dict(torch.load(hparams.frontend_weights))
-
-    #     print('setting frontend requires_grad to False...')
-    #     module.frontend.requires_grad = False
 
     trainer.fit(module)
 
@@ -269,6 +272,7 @@ def main(hparams):
 if __name__ == '__main__':
     parser = ArgumentParser(add_help=False)
     parser.add_argument('--track_grad_norm', type=int, default=-1)
+    parser.add_argument('--min_epochs', default=1, type=int)
     parser.add_argument('--max_epochs', default=100, type=int)
     parser.add_argument('--accumulate_grad_batches', type=int, default=1)
     parser.add_argument('--description', type=str, default='')

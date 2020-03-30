@@ -43,7 +43,7 @@ class TransformerModel(nn.Module):
         self.backend = TransformerBackend(vocab, nh)
 
     def forward(self, x, y=None):
-        x = self.frontend(x.unsqueeze(1))
+        x = self.frontend(x)
         x = self.backend(x, y)
         return x
 
