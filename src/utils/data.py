@@ -55,7 +55,7 @@ def zero_pad(samples):
 
 
 def pad_collate(samples, padding_value):
-    """Add padding to samples to make them have equal length
+    """Add padding to samples to make equal length
 
     :param samples: tuple (x, y, *rest) where the video tensor x is
     padded with zeros and the transcript tensor y is padded with
@@ -167,6 +167,9 @@ class LRW1Dataset(VisionDataset):
 
         if self.transform is not None:
             video = self.transform(video)
+
+        # squeeze channel dim
+        video = video.squeeze(0)
 
         return video, target
 
