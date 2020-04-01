@@ -24,36 +24,23 @@ def video_loader(path, start_pts=0, end_pts=None):
 
 def train_transform():
     return transforms.Compose([
-        lambda t: t.permute(0, 3, 1, 2),
-        # t.RandomFrameDrop(0.05),
-        transforms.Lambda(torch.unbind),
-        t.Map(
-            transforms.Compose(
-                [transforms.ToPILImage(),
-                 transforms.Grayscale()])),
-        t.CenterCrop([122, 122]),
-        t.RandomCrop([112, 112]),
+        transforms.Lambda(lambda t: t.permute(0, 3, 1, 2)),
+        t.Crop((112, 112), 'random'),
         t.RandomHorizontalFlip(),
-        t.Map(transforms.ToTensor()),
-        transforms.Lambda(torch.stack),
-        transforms.Lambda(lambda t: t.transpose(0, 1)),
-        t.Normalize()
+        t.GrayScale(),
+        t.Normalize(),
+        t.RandomFrameDrop(0.05),
+        transforms.Lambda(lambda t: t.transpose(0, 1))
     ])
 
 
 def val_transform():
     return transforms.Compose([
         transforms.Lambda(lambda t: t.permute(0, 3, 1, 2)),
-        transforms.Lambda(torch.unbind),
-        t.Map(
-            transforms.Compose(
-                [transforms.ToPILImage(),
-                 transforms.Grayscale()])),
-        t.CenterCrop([112, 112]),
-        t.Map(transforms.ToTensor()),
-        transforms.Lambda(torch.stack),
-        transforms.Lambda(lambda t: t.transpose(0, 1)),
-        t.Normalize()
+        t.Crop((112, 112), 'center'),
+        t.GrayScale(),
+        t.Normalize(),
+        transforms.Lambda(lambda t: t.transpose(0, 1))
     ])
 
 
@@ -180,8 +167,6 @@ class LRW1Dataset(VisionDataset):
 
         if self.transform is not None:
             video = self.transform(video)
-
-        video = video.squeeze(0)
 
         return video, target
 

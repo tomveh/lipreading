@@ -1,60 +1,63 @@
 import torch
-from .videotransforms import video_transforms
 
 
 class Normalize:
     def __call__(self, tensor):
-        mean = tensor.mean()
-        std = tensor.std()
-        return (tensor - mean) / std
+        return (tensor - tensor.mean()) / tensor.std()
 
 
-# class RandomFrameDrop:
-#     def __init__(self, p):
-#         self.p = p
-
-#     def __call__(self, tensor, padding='end'):
-#         # this is a T-length tensor (array) initially filled with
-#         # random values from [0, 1) and then compared to p
-#         # (=0.05). Ones mean that the frame will be kept and 0 means
-#         # that the frame is dropped
-#         t = tensor[torch.rand(len(tensor)) > self.p]
-
-#         if padding == 'end':
-#             padded = torch.zeros_like(tensor)
-#             padded[:len(t)] = t
-#             return padded
-
-#         return t
+class GrayScale:
+    def __call__(self, tensor):
+        # https://stackoverflow.com/questions/12201577/how-can-i-convert-an-rgb-image-into-grayscale-in-python
+        ret = (0.299 * tensor[:, 0] + 0.587 * tensor[:, 1] +
+               0.114 * tensor[:, 2]).unsqueeze(1)
+        return ret / 255
 
 
-class CenterCrop():
-    def __init__(self, size):
-        self.t = video_transforms.CenterCrop(size)
+class RandomFrameDrop:
+    def __init__(self, p):
+        self.p = p
 
-    def __call__(self, clip):
-        return self.t(clip)
+    def __call__(self, tensor):
+        t = tensor[torch.rand(len(tensor)) > self.p]
+
+        padded = torch.zeros_like(tensor)
+        padded[:len(t)] = t
+        return padded
 
 
-class RandomCrop():
-    def __init__(self, size):
-        self.t = video_transforms.RandomCrop(size)
+class Crop():
+    def __init__(self, size, crop):
+        assert crop in ['center', 'random']
+        self.crop = crop
+        self.size = size
 
-    def __call__(self, clip):
-        return self.t(clip)
+    def __call__(self, video):
+        w, h = self.size
+
+        video_w, video_h = video.shape[2:]
+
+        assert w == h
+        assert video_w == video_h
+        assert w % 2 == 0
+        assert video_w % 2 == 0
+
+        center_w = video_w // 2
+        center_h = video_h // 2
+
+        if self.crop == 'random':
+            center_w += torch.randint(low=-10, high=10, size=(1, ))
+            center_h += torch.randint(low=-10, high=10, size=(1, ))
+
+        d = w // 2
+
+        return video[:, :, center_h - d:center_h + d, center_w - d:center_w +
+                     d]
 
 
 class RandomHorizontalFlip():
-    def __init__(self):
-        self.t = video_transforms.RandomHorizontalFlip()
+    def __call__(self, video):
+        if torch.rand(1).item() > 0.5:
+            video = torch.flip(video, dims=[3])
 
-    def __call__(self, clip):
-        return self.t(clip)
-
-
-class Map:
-    def __init__(self, t):
-        self.t = t
-
-    def __call__(self, clip):
-        return [self.t(frame) for frame in clip]
+        return video
