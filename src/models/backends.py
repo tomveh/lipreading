@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from .beam_search import beam_search
 
@@ -8,30 +7,42 @@ from .beam_search import beam_search
 class ConvolutionalBackend(nn.Module):
     def __init__(self, input_channels, output_channels):
         super().__init__()
-        self.conv1 = nn.Conv1d(input_channels,
-                               2 * input_channels,
-                               kernel_size=5,
-                               stride=2,
-                               bias=False)
-        self.bn1 = nn.BatchNorm1d(2 * input_channels)
-        self.conv2 = nn.Conv1d(2 * input_channels,
-                               4 * input_channels,
-                               kernel_size=5,
-                               stride=2,
-                               bias=False)
-        self.bn2 = nn.BatchNorm1d(4 * input_channels)
-        self.linear1 = nn.Linear(4 * input_channels, input_channels)
-        self.bn3 = nn.BatchNorm1d(input_channels)
+        self.conv1 = nn.Sequential(
+            nn.Conv1d(input_channels,
+                      2 * input_channels,
+                      kernel_size=5,
+                      stride=2,
+                      bias=False), nn.BatchNorm1d(2 * input_channels),
+            nn.ReLU(inplace=True))
+
+        self.maxpool = nn.MaxPool1d(kernel_size=2, stride=2)
+
+        self.conv2 = nn.Sequential(
+            nn.Conv1d(2 * input_channels,
+                      4 * input_channels,
+                      kernel_size=5,
+                      stride=2,
+                      bias=False), nn.BatchNorm1d(4 * input_channels),
+            nn.ReLU(inplace=True))
+
+        self.avgpool = nn.AdaptiveAvgPool1d(output_size=1)
+
+        self.flatten = nn.Flatten()
+
+        self.linear1 = nn.Sequential(
+            nn.Linear(4 * input_channels, input_channels),
+            nn.BatchNorm1d(input_channels), nn.ReLU(inplace=True))
+
         self.linear2 = nn.Linear(input_channels, output_channels)
 
     def forward(self, x):
-        x = x.transpose(1, 2).contiguous(
-        )  # batch x depth x input_size -> batch x input_size x depth
-        x = F.relu(self.bn1(self.conv1(x)))
-        x = F.max_pool1d(x, kernel_size=2, stride=2)
-        x = F.relu(self.bn2(self.conv2(x)))
-        x = F.adaptive_avg_pool1d(x, output_size=1).squeeze(-1)
-        x = F.relu(self.bn3(self.linear1(x)))
+        x = x.transpose(1, 2).contiguous()  # transpose channel and depth dims
+        x = self.conv1(x)
+        x = self.maxpool(x)
+        x = self.conv2(x)
+        x = self.avgpool(x)
+        x = self.flatten(x)
+        x = self.linear1(x)
         x = self.linear2(x)
         return x
 
