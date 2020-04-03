@@ -26,7 +26,7 @@ from .frontend import VisualFrontend
 class PretrainNet(nn.Module):
     def __init__(self, resnet, nh):
         super().__init__()
-        self.frontend = VisualFrontend(out_channels=nh, resnet=resnet)
+        self.frontend = VisualFrontend()
         self.backend = ConvolutionalBackend(nh, 500)
 
     def forward(self, x):

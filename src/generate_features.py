@@ -84,7 +84,7 @@ def generate_features(root, model_path=None, device='cuda'):
     else:
         raise RuntimeError('Invalid dataset root', root)
 
-    model = VisualFrontend(out_channels=512, resnet='resnet18').to(device)
+    model = VisualFrontend().to(device)
 
     if model_path:
         if model_path.endswith('.pt'):
