@@ -1,4 +1,4 @@
-from pathlib import Path
+import os
 from argparse import ArgumentParser
 
 import Levenshtein
@@ -7,7 +7,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from pytorch_lightning.logging import TensorBoardLogger
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, random_split
 
 from models.backends import TransformerBackend
 from utils import data
@@ -107,7 +107,7 @@ class Seq2SeqPretrainModule(pl.LightningModule):
 
         sched = optim.lr_scheduler.ReduceLROnPlateau(opt,
                                                      factor=0.5,
-                                                     patience=100)
+                                                     patience=50)
 
         return [opt], [sched]
 
@@ -143,7 +143,7 @@ class Seq2SeqPretrainModule(pl.LightningModule):
 
         return {'val_loss': mean_cer, 'pred_string': pred_string}
 
-    def validation_end(self, outputs):
+    def validation_epoch_end(self, outputs):
         val_loss_mean = 0
 
         header = '| Real | Prediction | Greedy |  \n | --- | --- | --- |  \n'
@@ -162,47 +162,29 @@ class Seq2SeqPretrainModule(pl.LightningModule):
 
         return {'val_loss': val_loss_mean, 'log': {'cer/valid': val_loss_mean}}
 
-    @pl.data_loader
+    def prepare_data(self):
+        root = os.path.join(self.hparams.data_root, 'lrs2')
+        ds = data.LRS2FeatureDataset(root, self.vocab)
+
+        self.train_ds, self.val_ds = random_split(
+            ds, [int(0.8 * len(ds)),
+                 len(ds) - int(0.8 * len(ds))])
+
     def train_dataloader(self):
-        # train_ds = data.PretrainFeatureDataset(self.hparams.data_root,
-        #                                        vocab=self.vocab,
-        #                                        easy=self.hparams.easy)
-        train_ds = data.LRS2FeatureTrainSplit(
-            Path(self.hparams.data_root, 'lrs2'), self.vocab)
-        self.train_ds = train_ds
-        self.max_seq_len = train_ds.max_seq_len
+        return DataLoader(self.train_ds,
+                          batch_size=self.hparams.batch_size,
+                          collate_fn=lambda x: data.pad_collate(
+                              x, padding_value=self.vocab.token2idx('<pad>')),
+                          num_workers=self.hparams.workers,
+                          shuffle=True)
 
-        train_dl = DataLoader(
-            train_ds,
-            batch_size=self.hparams.batch_size,
-            collate_fn=lambda x: data.pad_collate(
-                x, padding_value=self.vocab.token2idx('<pad>')),
-            num_workers=self.hparams.workers,
-            shuffle=True)
-
-        return train_dl
-
-    @pl.data_loader
     def val_dataloader(self):
-        # val_ds = data.LRS2TestTrainDataset('train',
-        #                                    os.path.join(
-        #                                        self.hparams.data_root, 'lrs2'),
-        #                                    vocab=self.vocab,
-        #                                    transform=data.val_transform())
-        val_ds = data.LRS2FeatureValSplit(Path(self.hparams.data_root, 'lrs2'),
-                                          vocab=self.vocab)
-
-        self.val_ds = val_ds
-
-        val_dl = DataLoader(
-            val_ds,
-            batch_size=self.hparams.batch_size,
-            collate_fn=lambda x: data.pad_collate(
-                x, padding_value=self.vocab.token2idx('<pad>')),
-            num_workers=self.hparams.workers,
-            shuffle=True)
-
-        return val_dl
+        return DataLoader(self.val_ds,
+                          batch_size=self.hparams.batch_size,
+                          collate_fn=lambda x: data.pad_collate(
+                              x, padding_value=self.vocab.token2idx('<pad>')),
+                          num_workers=self.hparams.workers,
+                          shuffle=True)
 
     @staticmethod
     def add_model_specific_args(parent_parser):

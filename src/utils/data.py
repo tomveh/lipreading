@@ -380,50 +380,26 @@ class LRS2PretrainDataset(VisionDataset):
         return video, target
 
 
-# Validating seq2seq pretraining is difficult with the real validation
-# data since pretraining is done with curriculum learning whereas
-# validation sequences are fixed length (and word boundaries are not
-# known). Therefore pretrain dataset is further split into train and
-# val subsets to test seq2seq architecture and hyperparams
-
-
-class LRS2PretrainTrainSplit(LRS2PretrainDataset):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.samples = self.samples[:int(0.8 * len(self.samples))]
-
-
-class LRS2PretrainValSplit(LRS2PretrainDataset):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.samples = self.samples[int(0.8 * len(self.samples)):]
-
-
 class LRS2FeatureDataset():
     def __init__(self, root, vocab):
         self.max_seq_len = 2
+        self.min_seq_len = 2
         self.vocab = vocab
         self.samples = self._make_dataset(root)
         self.fps = 25
-
-    # def increase_seq_len(self):
-    #     self.max_seq_len += 1
-    #     return self.max_seq_len
 
     def _make_dataset(self, root):
         with open(Path(root, 'pretrain.txt'), 'r') as f:
             samples = []
 
             for line in f.readlines():
-                # TODO: change this line?
                 path = Path(root, 'mvlrs_v1', 'pretrain_features',
                             line.strip() + '.pt')
 
                 if path.exists():
                     features, label = torch.load(path)
 
-                    # if max seq len is 1 then we have to skip samples where no contiguous words can be found
-                    if 2 in label.all_utterances.keys():
+                    if self.min_seq_len in label.all_utterances.keys():
                         samples.append(str(path))
                 else:
                     print(f'{str(path)} not found')
@@ -437,7 +413,8 @@ class LRS2FeatureDataset():
         path = self.samples[idx]
 
         features, label = torch.load(path)
-        utterance, (start, end) = label.sample(self.max_seq_len, min_length=2)
+        utterance, (start, end) = label.sample(self.max_seq_len,
+                                               min_length=self.min_seq_len)
 
         first_frame = max(0, math.floor(start * self.fps))
         last_frame = min(features.shape[0], math.ceil(end * self.fps) + 1)
@@ -452,18 +429,6 @@ class LRS2FeatureDataset():
         ])
 
         return features, target
-
-
-class LRS2FeatureValSplit(LRS2FeatureDataset):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.samples = self.samples[int(0.8 * len(self.samples)):]
-
-
-class LRS2FeatureTrainSplit(LRS2FeatureDataset):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.samples = self.samples[:int(0.8 * len(self.samples))]
 
 
 class LRS2TestTrainDataset(VisionDataset):
