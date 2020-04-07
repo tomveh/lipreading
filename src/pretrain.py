@@ -4,7 +4,7 @@ from argparse import ArgumentParser
 
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
-from pytorch_lightning.logging import TensorBoardLogger
+from pytorch_lightning.logging import TestTubeLogger
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
@@ -23,7 +23,7 @@ class VisualPretrainModule(pl.LightningModule):
     def forward(self, x):
         return self.model(x)
 
-    def training_step(self, batch, batch_nr):
+    def training_step(self, batch, batch_idx):
         x, y = batch
 
         pred = self(x)
@@ -58,7 +58,7 @@ class VisualPretrainModule(pl.LightningModule):
 
         return [opt], [sched]
 
-    def validation_step(self, batch, batch_nr):
+    def validation_step(self, batch, batch_idx):
         x, y = batch
 
         pred = self(x)
@@ -80,14 +80,14 @@ class VisualPretrainModule(pl.LightningModule):
         val_acc /= len(outputs)
 
         return {
-            'val_acc': val_acc,
+            'val_loss': 1 - val_acc,
             'log': {
                 'loss/valid': val_loss,
                 'accuracy/valid': val_acc
             }
         }
 
-    def test_step(self, batch, batch_nr):
+    def test_step(self, batch, batch_idx):
         x, y = batch
 
         pred = self(x)
@@ -97,7 +97,7 @@ class VisualPretrainModule(pl.LightningModule):
 
         return {'test_loss': loss, 'test_acc': accuracy}
 
-    def test_end(self, outputs):
+    def test_epoch_end(self, outputs):
         test_loss = 0
         test_acc = 0
 
@@ -198,39 +198,18 @@ class VisualPretrainModule(pl.LightningModule):
 
 
 def main(hparams):
-    print('hparams', hparams)
     module = VisualPretrainModule(hparams)
 
-    save_dir = Path(__file__).parent.parent.absolute() / 'lightning_logs'
-    experiment_name = 'pretrain'
-    version = int(hparams.checkpoint) if hparams.checkpoint else None
-
-    logger = TensorBoardLogger(save_dir=save_dir,
-                               name=experiment_name,
-                               version=version)
-    _ = logger.experiment  # create log dir
-
-    base_path = save_dir / experiment_name / \
-        f'version_{logger.version}'
-
-    early_stopping = EarlyStopping(monitor='val_acc',
-                                   patience=3,
-                                   verbose=True,
-                                   mode='max')
-
-    checkpoint_callback = ModelCheckpoint(filepath=base_path /
-                                          'model_checkpoints',
-                                          monitor='val_acc',
-                                          mode='max',
-                                          verbose=True)
+    logger = TestTubeLogger(save_dir='tt_logs',
+                            name='pretrain',
+                            description=hparams.description)
 
     trainer = pl.Trainer(logger=logger,
-                         early_stop_callback=early_stopping,
-                         checkpoint_callback=checkpoint_callback,
+                         early_stop_callback=False,
+                         checkpoint_callback=True,
                          show_progress_bar=True,
                          gpus=1,
                          log_gpu_memory='all',
-                         fast_dev_run=hparams.fast_dev_run,
                          min_epochs=hparams.epochs,
                          max_epochs=hparams.epochs,
                          track_grad_norm=hparams.track_grad_norm)

@@ -1,5 +1,6 @@
 .DS_Store
 lightning_logs/
+tt_logs/
 __pycache__/
 *.out
 *.ipynb
