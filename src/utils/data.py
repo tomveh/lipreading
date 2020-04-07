@@ -103,13 +103,13 @@ class CharVocab:
 
 
 class LRW1Dataset(VisionDataset):
-    def __init__(self, root, subdir, transform=None, easy=False, vocab=None):
+    def __init__(self, root, splits, transform=None, easy=False, vocab=None):
         super().__init__(os.path.join(root, 'lipread_mp4'),
                          transform=transform)
         self.easy = easy
         self.vocab = vocab
         classes, class_to_idx = self._find_classes(self.root)
-        samples = self._make_dataset(subdir, class_to_idx)
+        samples = self._make_dataset(splits, class_to_idx)
 
         self.classes = classes
         self.class_to_idx = class_to_idx
@@ -124,38 +124,44 @@ class LRW1Dataset(VisionDataset):
         class_to_idx = {classes[i]: i for i in range(len(classes))}
         return classes, class_to_idx
 
-    def _make_dataset(self, subdir, class_to_idx):
+    def _make_dataset(self, splits, class_to_idx):
+        if isinstance(splits, str):
+            splits = [splits]
+
         samples = []
 
         def is_valid_file(path):
             return path.lower().endswith('.mp4')
 
         for target in sorted(class_to_idx.keys()):
-            d = os.path.join(self.root, target, subdir)
+            for split in splits:
+                d = os.path.join(self.root, target, split)
 
-            assert os.path.isdir(d)
+                assert os.path.isdir(d)
 
-            for root, _, fnames in sorted(os.walk(d)):
-                for fname in sorted(fnames):
-                    path = os.path.join(root, fname)
+                for root, _, fnames in sorted(os.walk(d)):
+                    for fname in sorted(fnames):
+                        path = os.path.join(root, fname)
 
-                    if is_valid_file(path):
+                        if is_valid_file(path):
 
-                        if self.vocab is None:
-                            # if no vocab then this is a classification task
-                            label = torch.tensor(class_to_idx[target])
-                        else:
-                            # else look up indices and add sos + eos
-                            label = torch.cat([
-                                torch.tensor([self.vocab.token2idx('<sos>')]),
-                                torch.tensor([
-                                    self.vocab.token2idx(token)
-                                    for token in target
-                                ]),
-                                torch.tensor([self.vocab.token2idx('<eos>')])
-                            ])
+                            if self.vocab is None:
+                                # if no vocab then this is a classification task
+                                label = torch.tensor(class_to_idx[target])
+                            else:
+                                # else look up indices and add sos + eos
+                                label = torch.cat([
+                                    torch.tensor(
+                                        [self.vocab.token2idx('<sos>')]),
+                                    torch.tensor([
+                                        self.vocab.token2idx(token)
+                                        for token in target
+                                    ]),
+                                    torch.tensor(
+                                        [self.vocab.token2idx('<eos>')])
+                                ])
 
-                        samples.append((path, label))
+                            samples.append((path, label))
 
         return samples
 
