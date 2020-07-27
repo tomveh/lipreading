@@ -61,3 +61,15 @@ class RandomHorizontalFlip():
             video = torch.flip(video, dims=[3])
 
         return video
+
+
+class Permute:
+    def __call__(self, x):
+        # permute to (depth, channels, height, width)
+        return x.permute(0, 3, 1, 2).contiguous()
+
+
+class Transpose:
+    def __call__(self, x):
+        # tranpose to (channels, depth, height, width)
+        return x.transpose(0, 1).contiguous()

@@ -2,131 +2,129 @@ import torch
 import torch.nn.functional as F
 
 
-def beam_search(model, x, beam_width=6, device='cuda'):
-    batch_size = x.shape[0]
-
-    # each sample in the batch gets its own beam
-    beams = [
-        Beam(model.vocab, beam_width=beam_width, device=device)
-        for _ in range(batch_size)
-    ]
-
-    # loop through samples in the batch
-    for b in range(batch_size):
-        sample = x[b].unsqueeze(0)  # add dummy batch dim
-        beam = beams[b]
-
-        src = sample.transpose(0, 1)  # max_seq_len, 1, d_model
-        src_key_padding_mask = sample.sum(
-            dim=-1) == 0  # pad input if all d_model dims are 0
-
-        while True:  # keep predicting until the beam has finished
-            y = beam.decoded  # (active_beams, seq_len)
-            tgt = model.embedding(y).transpose(
-                0, 1)  # (seq_len, active_beams, d_model)
-
-            # all beams are ran in parallel so expand src batch dim to the
-            # number of active beams (this has to be target shape rather than
-            # beam.active_beams because on the first iteration beam.decoded has
-            # batch size of 1 even though active_beams == beam_width)
-            src_expanded = src.expand(-1, tgt.shape[1], -1)
-            src_key_padding_mask_expanded = src_key_padding_mask.expand(
-                tgt.shape[1], -1)
-
-            out = model.transformer(
-                src_expanded,
-                tgt,
-                src_key_padding_mask=src_key_padding_mask_expanded
-            )  # (seq_len, 1, d_model)
-
-            # squeeze the dummy batch dimension
-            out = out.squeeze(1)
-
-            next_token_scores = F.log_softmax(model.linear(out[-1]),
-                                              dim=-1)  # (1, n_vocab)
-
-            done = beam.advance(next_token_scores)
-
-            if done:
-                break
-
-    return [max(beam.finished, key=lambda t: t[1])[0] for beam in beams]
+def _lp(length, beta=0.6):
+    '''
+    computes length normalization factor where length is the sequence
+    length and beta is a hyperparam
+    '''
+    return ((5 + length) / 6)**beta
 
 
-class Beam:
-    def __init__(self, vocab, beam_width, device='cuda'):
+def beam_search(model,
+                x,
+                beam_width=6,
+                batch_size=1000,
+                max_seq_len=100,
+                device='cuda',
+                min_finished=10):
+    N, S, E = x.shape
 
-        self.decoded = torch.tensor([vocab.token2idx('<sos>')
-                                     ]).view(1, 1).to(device)
-        self.scores = torch.zeros((1, 1)).to(device)
-        self.vocab = vocab
-        self.active_beams = beam_width
-        self.max_seq_len = 200
+    results = [[] for _ in range(N)]
 
-        # fall back to this default string if eos is not encountered until
-        # max_seq_len is reached
-        self.finished = [('#FAILED TO DECODE#', -float('inf'))]
+    # all beams start with <sos> but this will later become
+    # (N * beam_width, decoded_sequence_length)
+    decoded = torch.tensor([model.vocab.token2idx('<sos>')
+                            ]).expand(N, 1).clone().to(device)
 
-    def advance(self, next_token_scores):
-        '''next_token_scores: (1, n_vocab)'''
+    # unnormalized scores for decoded sequences
+    # same shape as decoded but without trailing dimension
+    scores = torch.zeros(N, 1).to(device)
 
-        # self.scores is (active_beams, n_vocab) and next_token_scores is (1,
-        # n_vocab)
-        beam_scores = self.scores + next_token_scores
+    while True:
+        split_log_probs = []
 
-        def lp(length, beta=0.6):
-            '''
-            computes length normalization factor where length is the sequence
-            length and beta is a hyperparam
-            '''
-            return ((5 + length) / 6)**beta
+        # on first iteration all beams are the same so no replication
+        beam_dim_size = 1 if decoded.shape[-1] == 1 else beam_width
 
-        decoded_length = self.decoded.shape[1]
-        length_normalized_scores = beam_scores / lp(
-            decoded_length)  # TODO: add shallow fusion here
+        # expand data to run beams in parallel
+        x_expanded = x.repeat(1, beam_dim_size, 1).reshape(-1, S, E)
 
-        topv, topi = length_normalized_scores.view(-1).topk(
-            k=self.active_beams)
+        # split data to not run out of memory
+        for x_split, decoded_split in zip(x_expanded.split(batch_size),
+                                          decoded.split(batch_size)):
+            src = x_split.transpose(0, 1).contiguous()  # S, B, E
+            tgt = model.embedding(decoded_split).transpose(
+                0, 1).contiguous()  # T, B, E
 
-        beam_idx = topi // self.vocab.n_output
-        token_idx = topi % self.vocab.n_output
+            tgt_mask = model.transformer.generate_square_subsequent_mask(
+                len(tgt)).type_as(tgt)
 
-        is_finished = token_idx == self.vocab.token2idx('<eos>')
+            src_key_padding_mask = (x_split == 0).all(dim=2)
+            tgt_key_padding_mask = decoded_split == model.vocab.token2idx(
+                '<pad>')
 
-        if is_finished.any():
-            self.active_beams -= is_finished.sum()
+            # return shape is (S, B, E)
+            out = model.transformer(src,
+                                    tgt,
+                                    tgt_mask=tgt_mask,
+                                    tgt_key_padding_mask=tgt_key_padding_mask,
+                                    src_key_padding_mask=src_key_padding_mask)
 
-            # if sequence is finished then add it to the list of
-            # finished candidates
-            finished_sequences = self.decoded.index_select(
-                dim=0, index=beam_idx[is_finished])  # TODO: maybe add <eos>?
-            finished_scores = length_normalized_scores.index_select(
-                dim=0, index=beam_idx[is_finished]).gather(
-                    dim=1, index=token_idx[is_finished].reshape(-1, 1))
+            split_lprobs = F.log_softmax(model.linear(out[-1]), dim=1)
+            split_log_probs.append(split_lprobs.detach())
 
-            for seq, score in zip(finished_sequences, finished_scores):
-                # ignore <sos> and map indices to characters
-                decoded_sequence = ''.join(
-                    self.vocab.idx2token(idx) for idx in seq[1:])
+        # concatenate all log probs
+        log_probs = torch.cat(split_log_probs).reshape(N, beam_dim_size, -1)
 
-                self.finished.append((decoded_sequence, score.item()))
+        # scores for every beam and all possible next predictions
+        # shape: batch x beam_dim_size x n_vocab
+        beam_scores = scores.unsqueeze(-1) + log_probs
 
-        if not is_finished.all():
-            # if sequence is not finished then add it to decoded and
-            # continue decoding
-            self.decoded = torch.cat([
-                self.decoded.index_select(dim=0, index=beam_idx[~is_finished]),
-                token_idx[~is_finished].reshape(-1, 1)
-            ],
-                                     axis=1)
+        # length normalization
+        normalized_scores = beam_scores / _lp(decoded.shape[-1] - 1)
 
-            # update scores with unnormalized scores that correspond
-            # to the top-k beams
-            self.scores = beam_scores.index_select(
-                dim=0, index=beam_idx[~is_finished]).gather(
-                    dim=1, index=token_idx[~is_finished].reshape(-1, 1))
+        # normalized scores are used to pick the next token
+        _, topi = normalized_scores.reshape(N, -1).topk(k=beam_width, dim=1)
 
-        # stop when all beams are finished or seq len is > 200
-        done = self.active_beams < 1 or decoded_length > self.max_seq_len
+        beam_idx = topi // model.vocab.n_output
+        token_idx = topi % model.vocab.n_output
 
-        return done
+        decoded_beginning = torch.cat([
+            decoded.reshape(N, beam_dim_size,
+                            -1)[i].index_select(dim=0, index=idx).unsqueeze(0)
+            for i, idx in zip(range(N), beam_idx)
+        ])
+
+        # update decoded
+        decoded = torch.cat(
+            [decoded_beginning, token_idx.unsqueeze(-1)],
+            dim=2).reshape(N * beam_width, -1)
+
+        # update scores
+        scores = normalized_scores.reshape(
+            N, beam_dim_size * model.vocab.n_output).gather(
+                dim=1, index=topi).reshape(N, beam_width)
+
+        # beam is finished if we predicted <eos>
+        finished = token_idx == model.vocab.token2idx('<eos>')
+
+        # if beam finished then append the result to results
+
+        for batch_i, beam_i in finished.nonzero():
+            indices = decoded.reshape(N, beam_width, -1)[batch_i, beam_i][1:-1]
+
+            vocab_cls_name = model.vocab.__class__.__name__
+            assert vocab_cls_name in ['SubwordVocab', 'CharVocab']
+
+            if vocab_cls_name == 'SubwordVocab':
+                seq = model.vocab.decode(list(indices))
+            else:
+                seq = ''.join([
+                    model.vocab.idx2token(idx)
+                    for idx in decoded.reshape(N, beam_width, -1)[batch_i,
+                                                                  beam_i][1:-1]
+                ])
+
+            score = scores[batch_i, beam_i].item()
+            results[batch_i].append({'seq': seq, 'score': score})
+
+            # set beam score to -inf so we won't pick this sequence again
+            scores[batch_i, beam_i] = float('-inf')
+
+        # stop if max length reached or every beam has at least
+        # min_finished results
+        if min([len(r) for r in results
+                ]) > min_finished or decoded.shape[-1] > max_seq_len:
+            break
+
+    return results

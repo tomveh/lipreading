@@ -110,8 +110,7 @@ def generate_features(root, model_path=None, device='cuda'):
                                             'pretrain_features') + '.pt'
 
             if video.shape[2] > 2500:
-                # skipping sequences that are too large to fit in the gpu (and
-                # possibly cpu) memory TODO: fix this
+                # skip sequences that are too long to fit in the gpu memory
                 print('skipping', file_prefix, video.shape)
                 continue
 

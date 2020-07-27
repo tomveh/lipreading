@@ -1,0 +1,43 @@
+#!/bin/bash -l
+#SBATCH -p dgx-spa
+#SBATCH --time=05-00
+#SBATCH --gres=gpu:v100:1
+#SBATCH --cpus-per-task=10
+#SBATCH --mem-per-cpu=4G
+#SBATCH --export=HOME,USER,TEAM,WRKDIR
+
+source activate lipreading
+
+mkdir /tmp/$SLURM_JOB_ID
+trap "rm -rf /tmp/$SLURM_JOB_ID; exit" TERM EXIT
+
+cd /tmp/$SLURM_JOB_ID
+mkdir lrs2
+cd lrs2
+cp /scratch/elec/puhe/c/LRS3-TED/lrs2/*.txt .
+cp /scratch/elec/puhe/c/LRS3-TED/lrs2/lrs2_v1.tar .
+tar xf lrs2_v1.tar
+rm lrs2_v1.tar
+cd ..
+
+mkdir lrs3
+cd lrs3
+cp /scratch/elec/puhe/c/LRS3-TED/lrs3/zip/*.zip .
+unzip -q lrs3_pretrain.zip
+unzip -q lrs3_trainval.zip
+rm *.zip
+
+cd /scratch/work/vehvilt2/lipreading
+
+python src/train_e2e.py\
+     --learning_rate 5e-5\
+     --weight_decay 1e-4\
+     --batch_size 64\
+     --data_root "/tmp/$SLURM_JOB_ID/"\
+     --workers 12\
+     --gpus 1\
+     --accumulate_grad_batches 1\
+     --max_epochs 100000\
+     --valid_interval 10\
+     --description "lrs2+lrs3 load from 52287967 and use seq len 3"\
+     --model_weights "/scratch/work/vehvilt2/lipreading/tb_logs/train_e2e/version_52287967_lr=0.0001_bs=64_gpus=1_description=continue-checkpoint-52219640-after-limiting-video-length_date=Apr-30-18:13/epoch=450-val_loss=0.76.ckpt"

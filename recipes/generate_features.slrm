@@ -1,0 +1,14 @@
+#!/bin/bash -l
+#SBATCH -p dgx-spa
+#SBATCH --time=01-00
+#SBATCH --gres=gpu:v100:1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem-per-cpu=2G
+#SBATCH --export=HOME,USER,TEAM,WRKDIR
+
+source activate lipreading
+
+python3 src/generate_features.py\
+	--root /scratch/elec/puhe/c/LRS3-TED/\
+	--model_path /m/triton/work/vehvilt2/lipreading/lightning_logs/pretrain/version_26/model_checkpoints/_ckpt_epoch_7.ckpt\
+	--ds lrs2

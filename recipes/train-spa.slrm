@@ -1,0 +1,26 @@
+#!/bin/bash -l
+#SBATCH -p dgx-spa
+#SBATCH --time=05-00
+#SBATCH --gres=gpu:v100:1
+#SBATCH --cpus-per-task=12
+#SBATCH --mem-per-cpu=4G
+#SBATCH --export=HOME,USER,TEAM,WRKDIR
+
+source activate lipreading
+
+python src/train.py\
+       --batch_size 100\
+       --accumulate_grad_batches 1\
+       --data_root "/scratch/elec/puhe/c/LRS3-TED/"\
+       --easy 0\
+       --learning_rate 1e-4\
+       --weight_decay 1e-3\
+       --d_model 512\
+       --description "run with small 3/3 layer transfommer + halve lr on plateau, patience 20"\
+       --weight_hist 0\
+       --track_grad_norm 0\
+       --workers 12\
+       --seq_inc_interval 0\
+       --min_epochs 1000\
+       --max_epochs 1000
+

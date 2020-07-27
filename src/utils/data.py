@@ -24,23 +24,23 @@ def video_loader(path, start_pts=0, end_pts=None):
 
 def train_transform():
     return transforms.Compose([
-        transforms.Lambda(lambda t: t.permute(0, 3, 1, 2)),
+        t.Permute(),
         t.Crop((112, 112), 'random'),
         t.RandomHorizontalFlip(),
         t.GrayScale(),
         t.Normalize(),
         t.RandomFrameDrop(0.05),
-        transforms.Lambda(lambda t: t.transpose(0, 1))
+        t.Transpose()
     ])
 
 
 def val_transform():
     return transforms.Compose([
-        transforms.Lambda(lambda t: t.permute(0, 3, 1, 2)),
+        t.Permute(),
         t.Crop((112, 112), 'center'),
         t.GrayScale(),
         t.Normalize(),
-        transforms.Lambda(lambda t: t.transpose(0, 1))
+        t.Transpose()
     ])
 
 
@@ -87,12 +87,10 @@ class CharVocab:
         self._token2idx_dict = dict(
             (token, i) for i, token in enumerate(self._tokens))
 
-        # transformer model must have embedding vector for each token (even for
-        # pad even though it is never used)
+        # every token must have an embedding
         self.n_embed = len(self._tokens)
 
-        # but when output probabilities for next token are produced predicting
-        # pad or sos should not be possible
+        # <pad> and <sos> are not valid outputs
         self.n_output = len(self._tokens) - 2
 
     def idx2token(self, idx):
@@ -128,6 +126,8 @@ class LRW1Dataset(VisionDataset):
         if isinstance(splits, str):
             splits = [splits]
 
+        assert all([x in ['train', 'val', 'test'] for x in splits])
+
         samples = []
 
         def is_valid_file(path):
@@ -146,7 +146,8 @@ class LRW1Dataset(VisionDataset):
                         if is_valid_file(path):
 
                             if self.vocab is None:
-                                # if no vocab then this is a classification task
+                                # if no vocab then this is a
+                                # classification task
                                 label = torch.tensor(class_to_idx[target])
                             else:
                                 # else look up indices and add sos + eos
@@ -253,7 +254,8 @@ class PretrainLabel():
             if k <= max_length and k >= min_length
         ]
 
-        assert len(possible_lengths) > 0
+        assert len(possible_lengths) > 0, print(possible_lengths,
+                                                self.all_utterances)
         utter_len = possible_lengths[randrange(0, len(possible_lengths))]
 
         # all utterances of length utter_len
@@ -265,73 +267,140 @@ class PretrainLabel():
         return sampled['utterance'], (sampled['start'], sampled['end'])
 
 
-class LRS2PretrainWordDataset(VisionDataset):
-    def __init__(self, root, classes, vocab=None, transform=None):
-        super().__init__(root, transform=transform)
-        self.vocab = vocab
-        self.classes = classes
-        self.class_to_idx = {self.classes[i]: i for i in range(len(classes))}
-        self.samples = self._make_dataset(root)
+# class LRS2PretrainWordDataset(VisionDataset):
+#     def __init__(self, root, classes, vocab=None, transform=None):
+#         super().__init__(root, transform=transform)
+#         self.vocab = vocab
+#         self.classes = classes
+#         self.class_to_idx = {self.classes[i]: i for i in range(len(classes))}
+#         self.samples = self._make_dataset(root)
 
-    def _make_dataset(self, root):
-        with open(os.path.join(root, 'pretrain.txt'), 'r') as f:
-            samples = []
+#     def _make_dataset(self, root):
+#         with open(os.path.join(root, 'pretrain.txt'), 'r') as f:
+#             samples = []
 
-            for line in f.readlines():
-                file_prefix = os.path.join(root, 'mvlrs_v1', 'pretrain',
-                                           line.strip())
+#             def valid_length(start, end):
+#                 clip_length = end - start
+#                 return clip_length > 0.5 and clip_length < 2
 
-                with open(file_prefix + '.txt', 'r') as f2:
-                    for line in f2.readlines()[4:]:
-                        word, start, end, _ = line.split()
+#             for line in f.readlines():
+#                 file_prefix = os.path.join(root, 'mvlrs_v1', 'pretrain',
+#                                            line.strip())
 
-                        start, end = float(start), float(end)
+#                 with open(file_prefix + '.txt', 'r') as f2:
+#                     for line in f2.readlines()[4:]:
+#                         word, start, end, _ = line.split()
 
-                        # skip if target is not in the given list of
-                        # words (500 LRW1 words) or if the clip is too
-                        # long
-                        if word not in self.classes or end - start > 1.5:
-                            continue
+#                         start, end = float(start), float(end)
 
-                        if self.vocab is None:
-                            target = torch.tensor(self.class_to_idx[word])
-                        else:
-                            target = torch.cat([
-                                torch.tensor([self.vocab.token2idx('<sos>')]),
-                                torch.tensor([
-                                    self.vocab.token2idx(token)
-                                    for token in word
-                                ]),
-                                torch.tensor([self.vocab.token2idx('<eos>')])
-                            ])
+#                         # skip if target is not in the list of given
+#                         # words (500 LRW1 words) or if the clip is too
+#                         # long or too short
+#                         if word not in self.classes or not valid_length(
+#                                 start, end):
+#                             continue
 
-                        if word in self.classes:
-                            sample = (file_prefix, target, (start, end))
-                            samples.append(sample)
+#                         if self.vocab is None:
+#                             target = torch.tensor(self.class_to_idx[word])
+#                         else:
+#                             target = torch.cat([
+#                                 torch.tensor([self.vocab.token2idx('<sos>')]),
+#                                 torch.tensor([
+#                                     self.vocab.token2idx(token)
+#                                     for token in word
+#                                 ]),
+#                                 torch.tensor([self.vocab.token2idx('<eos>')])
+#                             ])
 
-            return samples
+#                         if word in self.classes:
+#                             sample = (file_prefix, target, (start, end))
+#                             samples.append(sample)
 
-    def __len__(self):
-        return len(self.samples)
+#             return samples
 
-    def __getitem__(self, idx):
-        file_prefix, target, (start, end) = self.samples[idx]
+#     def __len__(self):
+#         return len(self.samples)
 
-        video = video_loader(file_prefix + '.mp4', start, end)
+#     def __getitem__(self, idx):
+#         file_prefix, target, (start, end) = self.samples[idx]
 
-        if self.transform is not None:
-            video = self.transform(video)
+#         video = video_loader(file_prefix + '.mp4', start, end)
 
-        video = video.squeeze(0)
+#         if self.transform is not None:
+#             video = self.transform(video)
 
-        return video, target
+#         video = video.squeeze(0)
+
+#         return video, target
 
 
 class LRS2PretrainDataset(VisionDataset):
     def __init__(self, root, vocab, transform=None):
         super().__init__(root, transform=transform)
         self.max_seq_len = 2
+        self.min_seq_len = 2
         self.vocab = vocab
+
+        # I guess we can assume that in e2e 128 batch and 25 frames
+        # fit. When length is increased we can just interpolate that
+        # and decrease batch as needed (and accumulate grads when
+        # batchs get too small)
+
+        self.valid_length = {
+            # TODO: min is not needed
+            1: (0.060, 0.640),
+            2: (0.200, 0.990),
+            3: (0.360, 1.320),
+            4: (0.510, 1.630),
+            5: (0.680, 1.940),
+            6: (0.850, 2.240),
+            7: (1.010, 2.530),
+            8: (1.180, 2.820),
+            9: (1.350, 3.100),
+            10: (1.520, 3.380),
+            11: (1.690, 3.650),
+            12: (1.860, 3.920),
+            13: (2.030, 4.180),
+            14: (2.190, 4.450),
+            15: (2.360, 4.710),
+            16: (2.530, 4.980),
+            17: (2.700, 5.240),
+            18: (2.880, 5.510),
+            19: (3.050, 5.780),
+            20: (3.230, 6.050),
+            21: (3.410, 6.303),
+            22: (3.590, 6.578),
+            23: (3.780, 6.810),
+            24: (3.950, 7.070),
+            25: (4.119, 7.250),
+            26: (4.320, 7.520),
+            27: (4.558, 7.822),
+            28: (4.740, 8.086),
+            29: (5.008, 8.460),
+            30: (5.180, 8.770),
+            31: (5.370, 9.148),
+            32: (5.578, 9.573),
+            33: (5.710, 9.818),
+            34: (5.895, 10.193),
+            35: (6.082, 10.572),
+            36: (6.339, 10.965),
+            37: (6.590, 11.344),
+            38: (6.977, 11.718),
+            39: (7.450, 12.130),
+            40: (7.865, 12.310),
+            41: (8.115, 12.071),
+            42: (8.280, 11.110),
+            43: (8.601, 10.811),
+            44: (9.572, 11.070),
+            45: (10.940, 11.238),
+            46: (11.120, 11.503),
+            47: (11.390, 11.676),
+            48: (11.591, 11.953),
+            49: (11.875, 12.163),
+            50: (12.298, 12.442),
+            51: (12.570, 12.570)
+        }
+
         self.samples = self._make_dataset(root)
 
     def _make_dataset(self, root):
@@ -350,11 +419,19 @@ class LRS2PretrainDataset(VisionDataset):
                 else:
                     label = torch.load(str(label_path))
 
-                # some pretrain videos have no two consecutive words
-                # so let's not include such videos in samples because
-                # then we might sample a video that has less than 3
-                # video frames => 3d conv fails
-                if 2 in label.all_utterances.keys():
+                # the loop in getitem can get stuck if all possible
+                # sequences are too long. This makes sure we skip
+                # videos that don't have any plausible candidates
+                min_len = min([
+                    x['end'] - x['start']
+                    for x in label.all_utterances[self.min_seq_len]
+                ]) if label.all_utterances[self.min_seq_len] else float('inf')
+
+                # we want to exclude videos from dataset if
+                # 1) the video does not have `self.min_seq_len` contiguous words
+                # 2) length of the video is above the threshold
+                if self.min_seq_len in label.all_utterances.keys(
+                ) and min_len <= self.valid_length[self.max_seq_len][1]:
                     samples.append(file_prefix)
 
         return samples
@@ -366,7 +443,17 @@ class LRS2PretrainDataset(VisionDataset):
         file_prefix = self.samples[idx]
 
         label = torch.load(file_prefix + '.label')
-        utterance, (start, end) = label.sample(self.max_seq_len, min_length=2)
+
+        while True:
+            # print('loop')
+            # this is bit hacky and can lead to problems
+            # but keep sampling until we get a sequence that is not too long
+            utterance, (start, end) = label.sample(self.max_seq_len,
+                                                   min_length=self.min_seq_len)
+
+            if end - start <= self.valid_length[self.max_seq_len][1]:
+                # print('break')
+                break
 
         video = video_loader(file_prefix + '.mp4', start, end)
 
@@ -387,10 +474,11 @@ class LRS2PretrainDataset(VisionDataset):
 
 
 class LRS2FeatureDataset():
-    def __init__(self, root, vocab):
+    def __init__(self, root, vocab, easy=False):
         self.max_seq_len = 2
         self.min_seq_len = 2
         self.vocab = vocab
+        self.easy = easy
         self.samples = self._make_dataset(root)
         self.fps = 25
 
@@ -398,7 +486,9 @@ class LRS2FeatureDataset():
         with open(Path(root, 'pretrain.txt'), 'r') as f:
             samples = []
 
-            for line in f.readlines():
+            lines = f.readlines() if not self.easy else f.readlines()[:500]
+
+            for line in lines:
                 path = Path(root, 'mvlrs_v1', 'pretrain_features',
                             line.strip() + '.pt')
 
@@ -435,6 +525,9 @@ class LRS2FeatureDataset():
         ])
 
         return features, target
+
+    def increase_seq_len(self):
+        self.max_seq_len += 1
 
 
 class LRS2TestTrainDataset(VisionDataset):
@@ -487,50 +580,49 @@ class LRS2TestTrainDataset(VisionDataset):
         return video, indices
 
 
-class LRS2TextDataset(Dataset):
-    def __init__(self, root, vocab, subsets):
-        self.vocab = vocab
-        self.subsets = subsets
-        self.samples = self._make_dataset(root)
+# class LRS2TextDataset(Dataset):
+#     def __init__(self, root, vocab, subsets):
+#         self.vocab = vocab
+#         self.subsets = subsets
+#         self.samples = self._make_dataset(root)
 
-    def _make_dataset(self, root):
-        samples = []
+#     def _make_dataset(self, root):
+#         samples = []
 
-        for subset in self.subsets:
-            with open(os.path.join(root, f'{subset}.txt'), 'r') as f:
-                lines = f.readlines()
+#         for subset in self.subsets:
+#             with open(os.path.join(root, f'{subset}.txt'), 'r') as f:
+#                 lines = f.readlines()
 
-                for line in lines:
-                    subdir = 'pretrain' if subset == 'pretrain' else 'main'
-                    path = os.path.join(root, 'mvlrs_v1', subdir,
-                                        line.split()[0].strip() + '.txt')
+#                 for line in lines:
+#                     subdir = 'pretrain' if subset == 'pretrain' else 'main'
+#                     path = os.path.join(root, 'mvlrs_v1', subdir,
+#                                         line.split()[0].strip() + '.txt')
 
-                    with open(path, 'r') as f:
-                        f_lines = f.readlines()
-                        text_lines = [
-                            l for l in f_lines if l.strip().startswith('Text:')
-                        ]
-                        assert len(text_lines) == 1
+#                     with open(path, 'r') as f:
+#                         f_lines = f.readlines()
+#                         text_lines = [
+#                             l for l in f_lines if l.strip().startswith('Text:')
+#                         ]
+#                         assert len(text_lines) == 1
 
-                        sample = text_lines[0].split(maxsplit=1)[1].strip()
-                        indices = torch.cat([
-                            torch.tensor([self.vocab.token2idx('<sos>')]),
-                            torch.tensor([
-                                self.vocab.token2idx(char) for char in sample
-                            ]),
-                            torch.tensor([self.vocab.token2idx('<eos>')])
-                        ])
+#                         sample = text_lines[0].split(maxsplit=1)[1].strip()
+#                         indices = torch.cat([
+#                             torch.tensor([self.vocab.token2idx('<sos>')]),
+#                             torch.tensor([
+#                                 self.vocab.token2idx(char) for char in sample
+#                             ]),
+#                             torch.tensor([self.vocab.token2idx('<eos>')])
+#                         ])
 
-                    samples.append(indices)
+#                     samples.append(indices)
 
-        return samples
+#         return samples
 
-    def __len__(self):
-        return len(self.samples)
+#     def __len__(self):
+#         return len(self.samples)
 
-    def __getitem__(self, idx):
-        return self.samples[idx]
-
+#     def __getitem__(self, idx):
+#         return self.samples[idx]
 
 # class LRS3FeatureDataset():
 #     def __init__(self, root, vocab, easy=False):
@@ -607,3 +699,139 @@ class LRS2TextDataset(Dataset):
 #         assert self.lrs2.max_seq_len == self.lrs3.max_seq_len
 
 #         return self.lrs2.max_seq_len
+
+
+class LRS3PretrainDataset(VisionDataset):
+    def __init__(self, root, vocab, transform=None):
+        super().__init__(root, transform=transform)
+        self.max_seq_len = 2
+        self.min_seq_len = 2
+        self.vocab = vocab
+
+        self.valid_length = {
+            1: (0.0700, 0.6800),
+            2: (0.2100, 1.0400),
+            3: (0.3800, 1.3700),
+            4: (0.5500, 1.7000),
+            5: (0.7200, 2.0200),
+            6: (0.9000, 2.3300),
+            7: (1.0800, 2.6300),
+            8: (1.2500, 2.9300),
+            9: (1.4300, 3.2200),
+            10: (1.6000, 3.5000),
+            11: (1.7800, 3.7800),
+            12: (1.9500, 4.0500),
+            13: (2.1200, 4.3200),
+            14: (2.2900, 4.5900),
+            15: (2.4600, 4.8600),
+            16: (2.6300, 5.1200),
+            17: (2.8000, 5.3900),
+            18: (2.9600, 5.6600),
+            19: (3.1200, 5.9300),
+            20: (3.2800, 6.2000),
+            21: (3.4600, 6.4600),
+            22: (3.6300, 6.7300),
+            23: (3.7900, 6.9850),
+            24: (3.9500, 7.2350),
+            25: (4.1100, 7.5300),
+            26: (4.2500, 7.8200),
+            27: (4.4060, 8.1300),
+            28: (4.5400, 8.4400),
+            29: (4.6650, 8.7800),
+            30: (4.8100, 9.1300),
+            31: (4.9275, 9.5725),
+            32: (5.0250, 10.0100),
+            33: (5.1825, 10.4325),
+            34: (5.3080, 12.7720),
+            35: (5.4300, 13.3650),
+            36: (5.6250, 13.9420),
+            37: (5.7230, 14.2835),
+            38: (5.9370, 14.6565),
+            39: (6.0520, 15.1300),
+            40: (6.1590, 15.4310),
+            41: (6.3500, 15.8800),
+            42: (6.5025, 16.2900),
+            43: (6.5900, 16.6300),
+            44: (6.7400, 17.0140),
+            45: (6.8370, 17.3620),
+            46: (7.0065, 17.6775),
+            47: (7.1715, 18.0200),
+            48: (7.2585, 18.4990),
+            49: (7.4490, 18.8510),
+            50: (7.6210, 19.2280),
+            51: (7.7790, 19.4240),
+            52: (11.9260, 19.8025),
+            53: (19.6550, 20.0800),
+            54: (20.0540, 20.5540),
+            55: (20.4550, 20.7030),
+            56: (20.8940, 21.0470),
+            57: (21.3840, 21.4560),
+            58: (21.9600, 21.9600)
+        }
+
+        self.samples = self._make_dataset(root)
+
+    def _make_dataset(self, root):
+        samples = []
+
+        for f in Path(root, 'pretrain').rglob('**/*.txt'):
+            file_prefix = str(f).replace('.txt', '')
+
+            label_path = Path(file_prefix + '.label')
+
+            if not label_path.exists():
+                label = PretrainLabel(str(f))
+                torch.save(label, str(label_path))
+            else:
+                label = torch.load(str(label_path))
+
+            # the loop in getitem can get stuck if all possible
+            # sequences are too long. This makes sure we skip
+            # videos that don't have any plausible candidates
+            min_len = min([
+                x['end'] - x['start']
+                for x in label.all_utterances[self.min_seq_len]
+            ] if len(label.all_utterances[self.min_seq_len]) > 0 else
+                          [float('inf')])
+
+            if self.min_seq_len in label.all_utterances.keys(
+            ) and min_len <= self.valid_length[self.max_seq_len][1]:
+                samples.append(file_prefix)
+
+        return samples
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        file_prefix = self.samples[idx]
+
+        label = torch.load(file_prefix + '.label')
+
+        while True:
+            # print('loop2')
+            # this is bit hacky and can lead to problems
+            # but keep sampling until we get a sequence that is not too long
+            utterance, (start, end) = label.sample(max_length=self.max_seq_len,
+                                                   min_length=self.min_seq_len)
+
+            if end - start <= self.valid_length[self.max_seq_len][1]:
+                # print('break2')
+                break
+
+        video = video_loader(file_prefix + '.mp4', start, end)
+
+        if self.transform is not None:
+            video = self.transform(video)
+
+        target_indices = torch.tensor(
+            [self.vocab.token2idx(char) for char in utterance])
+
+        target = torch.cat([
+            torch.tensor([self.vocab.token2idx('<sos>')]), target_indices,
+            torch.tensor([self.vocab.token2idx('<eos>')])
+        ])
+
+        video = video.squeeze(0)
+
+        return video, target

@@ -3,21 +3,25 @@ from argparse import ArgumentParser
 
 import Levenshtein
 import pytorch_lightning as pl
-from pytorch_lightning.logging import TestTubeLogger
+import torch
 import torch.nn as nn
 import torch.optim as optim
+from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
+from pytorch_lightning.logging import TensorBoardLogger
 from torch.utils.data import DataLoader, random_split
 
+from jiwer import wer
 from models.backends import TransformerBackend
-from utils import data
+from utils import callbacks, data
+from utils.version import version as v
 
 
-class Seq2SeqPretrainModule(pl.LightningModule):
+class TrainModule(pl.LightningModule):
     def __init__(self, hparams):
         super().__init__()
         self.hparams = hparams
         self.vocab = data.CharVocab()
-        self.model = TransformerBackend(self.vocab, nh=self.hparams.d_model)
+        self.model = TransformerBackend(self.vocab)
         self.loss_fn = nn.CrossEntropyLoss(
             reduction='mean', ignore_index=self.vocab.token2idx('<pad>'))
 
@@ -27,49 +31,25 @@ class Seq2SeqPretrainModule(pl.LightningModule):
     def training_step(self, batch, batch_nr):
         x, y, _ = batch
 
-        # drop the last column which contains pad or eos token because
-        # we don't care about the next token after eos (if the dropped
-        # token is pad and eos is still in the train sequence, then
-        # the corresponding target token will be pad and the loss will
-        # ignore the prediction matching the eos token)
-        y_ = y[:, :-1]
-
-        pred = self(x, y_)
+        pred = self(x, y[:, :-1])
 
         # drop <sos> token from each batch
         target = y[:, 1:]
 
         loss = self.loss_fn(pred, target)
 
+        # save these for logging
+        self.prev_loss = loss.item()
+        self.target = target.detach()
+        self.pred = pred.detach()
+
         log = {
             'loss/train': loss,
-            'learning_rate': self.trainer.optimizers[0].param_groups[0]['lr']
+            'learning_rate': self.trainer.optimizers[0].param_groups[0]['lr'],
+            'train_ds_seq_len': self.train_ds.dataset.datasets[0].max_seq_len,
+            'val_ds_seq_len': self.val_ds.dataset.datasets[0].max_seq_len,
+            'epoch': self.current_epoch
         }
-
-        if self.global_step % 5000 == 0:
-            target_s = [
-                ''.join([self.vocab.idx2token(idx) for idx in line
-                         ]).replace('<sos>',
-                                    '$').replace('<eos>',
-                                                 '$').replace('<pad>', '#')
-                for line in target
-            ]
-
-            pred_s = [
-                ''.join([self.vocab.idx2token(idx)
-                         for idx in line]).replace('<eos>', '$')
-                for line in pred.argmax(dim=1)
-            ]
-
-            header = '| Label | Pred |  \n | --- | --- |  \n'
-
-            s = header + '  \n'.join([
-                f'{label} | {pred} |' for label, pred in zip(target_s, pred_s)
-            ])
-
-            self.logger.experiment.add_text('train_prediction',
-                                            s,
-                                            global_step=self.global_step)
 
         return {'loss': loss, 'log': log}
 
@@ -78,18 +58,22 @@ class Seq2SeqPretrainModule(pl.LightningModule):
                           lr=self.hparams.learning_rate,
                           weight_decay=self.hparams.weight_decay)
 
-        sched = optim.lr_scheduler.ReduceLROnPlateau(opt,
-                                                     factor=0.5,
-                                                     patience=50)
-
-        return [opt], [sched]
+        return [opt]
 
     def validation_step(self, batch, batch_nr):
+        # if self.current_epoch % self.hparams.valid_interval:
+        #     return {}
+
         x, y, _ = batch
 
-        predictions = self(x)
+        beam_results = self(x)
 
-        greedys = self.model.greedy(x)
+        predictions = [
+            max(result,
+                key=lambda d: d['score'],
+                default={'seq': '### FAILED TO DECODE ###'})['seq']
+            for result in beam_results
+        ]
 
         special = [
             self.vocab.token2idx(x) for x in ['<pad>', '<sos>', '<eos>']
@@ -102,46 +86,53 @@ class Seq2SeqPretrainModule(pl.LightningModule):
         ]
 
         cers = []
+        wers = []
 
         for pred, target in zip(predictions, targets):
-            cer = Levenshtein.distance(pred, target) / len(target)
-            cers.append(cer)
+            cers.append(Levenshtein.distance(pred, target) / len(target))
+            wers.append(wer(target, pred))
 
         pred_string = '  \n'.join([
-            f'{label} | {pred} | {greedy}'
-            for label, pred, greedy in zip(targets, predictions, greedys)
+            f'| {target} | {pred} | {wer} | '
+            for target, pred, wer in zip(targets, predictions, wers)
         ])
 
         mean_cer = sum(cers) / len(cers)
+        mean_wer = sum(wers) / len(wers)
 
-        return {'val_loss': mean_cer, 'pred_string': pred_string}
+        return {'cer': mean_cer, 'wer': mean_wer, 'pred_string': pred_string}
 
     def validation_epoch_end(self, outputs):
-        val_loss_mean = 0
+        # if self.current_epoch % self.hparams.valid_interval:
+        #     self.prev_valid_stats = None
+        #     return {'val_loss': float('inf')}
 
-        header = '| Real | Prediction | Greedy |  \n | --- | --- | --- |  \n'
+        header = '| Real | Prediction | WER | \n | --- | --- | --- | \n'
 
-        s = header + '  \n'.join(
-            [output['pred_string'] for output in outputs[:10]])
+        s = header + '  \n'.join([output['pred_string'] for output in outputs])
 
-        self.logger.experiment.add_text(tag='validation_predictions',
-                                        text_string=s,
-                                        global_step=self.current_epoch)
+        valid_cer = torch.tensor([x['cer'] for x in outputs]).mean()
+        valid_wer = torch.tensor([x['wer'] for x in outputs]).mean()
 
-        for output in outputs:
-            val_loss_mean += output['val_loss']
+        self.prev_valid_stats = {'cer': valid_cer, 'wer': valid_wer, 's': s}
 
-        val_loss_mean /= len(outputs)
-
-        return {'val_loss': val_loss_mean, 'log': {'cer/valid': val_loss_mean}}
+        return {
+            'val_loss': valid_wer,
+            'log': {
+                'valid/cer': valid_cer,
+                'valid/wer': valid_wer
+            }
+        }
 
     def prepare_data(self):
         root = os.path.join(self.hparams.data_root, 'lrs2')
         ds = data.LRS2FeatureDataset(root, self.vocab)
 
         self.train_ds, self.val_ds = random_split(
-            ds, [int(0.8 * len(ds)),
-                 len(ds) - int(0.8 * len(ds))])
+            ds, [int(0.9 * len(ds)),
+                 len(ds) - int(0.9 * len(ds))])
+
+        # self.train_ds.dataset.max_seq_len = 3
 
     def train_dataloader(self):
         return DataLoader(self.train_ds,
@@ -149,7 +140,8 @@ class Seq2SeqPretrainModule(pl.LightningModule):
                           collate_fn=lambda x: data.pad_collate(
                               x, padding_value=self.vocab.token2idx('<pad>')),
                           num_workers=self.hparams.workers,
-                          shuffle=True)
+                          shuffle=True,
+                          pin_memory=True)
 
     def val_dataloader(self):
         return DataLoader(self.val_ds,
@@ -157,60 +149,91 @@ class Seq2SeqPretrainModule(pl.LightningModule):
                           collate_fn=lambda x: data.pad_collate(
                               x, padding_value=self.vocab.token2idx('<pad>')),
                           num_workers=self.hparams.workers,
-                          shuffle=True)
+                          shuffle=True,
+                          pin_memory=True)
 
     @staticmethod
     def add_model_specific_args(parent_parser):
         parser = ArgumentParser(parents=[parent_parser])
 
         # model
-        parser.add_argument('--d_model', default=512, type=int)
         parser.add_argument('--learning_rate', default=3e-4, type=float)
         parser.add_argument('--weight_decay', default=1e-3, type=float)
         parser.add_argument('--batch_size', default=64, type=int)
 
         # data
-        parser.add_argument('--data_root', type=str, required=True)
+        parser.add_argument('--data_root',
+                            type=str,
+                            default=f'/tmp/{os.environ["SLURM_JOB_ID"]}')
+
+        # checkpoint
+        parser.add_argument('--model_weights', default='', type=str)
 
         # training
-        parser.add_argument('--workers', default=16, type=int)
-        # parser.add_argument('--seq_inc_interval', default=3, type=int)
+        parser.add_argument('--workers', default=12, type=int)
+        parser.add_argument('--valid_interval', default=10, type=int)
+        parser.add_argument('--seq_inc_interval', default=500, type=int)
+
+        # general
+        parser.add_argument('--description', type=str, default='')
 
         return parser
 
 
-def main(hparams):
-    module = Seq2SeqPretrainModule(hparams)
+def main(hparams, version_hparams):
+    print(hparams)
 
-    logger = TestTubeLogger(save_dir='tt_logs',
-                            name='train',
-                            description=hparams.description,
-                            debug=False)
+    module = TrainModule(hparams)
+
+    if hparams.model_weights:
+        m = TrainModule.load_from_checkpoint(hparams.model_weights)
+        module.model.load_state_dict(m.model.state_dict())
+        print('loaded model weights from', hparams.model_weights)
+
+    logger = TensorBoardLogger(save_dir='tb_logs',
+                               name='train',
+                               version=v(version_hparams, hparams))
+    logger.log_hyperparams(hparams)
+
+    ckpt_path = os.path.join(logger.save_dir, logger.name, logger.version,
+                             '{epoch}-{val_loss:.2f}')
+    checkpoint_callback = ModelCheckpoint(ckpt_path,
+                                          monitor='val_loss',
+                                          verbose=True)
 
     trainer = pl.Trainer(
         logger=logger,
+        # amp_level='O2',
+        # precision=16,
+        callbacks=[
+            callbacks.SequenceLengthCallback(),
+            callbacks.PrintCallback(),
+            callbacks.TimerCallback(),
+            callbacks.PredictionLoggerCallback()
+        ],
+        progress_bar_refresh_rate=0,
         early_stop_callback=False,
-        checkpoint_callback=True,
-        gpus=1,
+        checkpoint_callback=checkpoint_callback,
+        gpus=int(hparams.gpus),
         log_gpu_memory='all',
-        print_nan_grads=True,
+        print_nan_grads=hparams.print_nan_grads,
         accumulate_grad_batches=hparams.accumulate_grad_batches,
-        fast_dev_run=0,
         min_epochs=hparams.min_epochs,
         max_epochs=hparams.max_epochs,
-        track_grad_norm=hparams.track_grad_norm)
+    )
 
     trainer.fit(module)
 
 
 if __name__ == '__main__':
     parser = ArgumentParser(add_help=False)
-    parser.add_argument('--track_grad_norm', type=int, default=-1)
-    parser.add_argument('--min_epochs', default=1, type=int)
-    parser.add_argument('--max_epochs', default=100, type=int)
-    parser.add_argument('--accumulate_grad_batches', type=int, default=1)
-    parser.add_argument('--description', type=str, default='')
-    parser = Seq2SeqPretrainModule.add_model_specific_args(parser)
+
+    parser = TrainModule.add_model_specific_args(parser)
+    parser = pl.Trainer.add_argparse_args(parser)
 
     hparams = parser.parse_args()
-    main(hparams)
+
+    version_hparams = [('lr', 'learning_rate'), ('bs', 'batch_size'),
+                       ('gpus', None), ('description', None)]
+
+    main(hparams, version_hparams)

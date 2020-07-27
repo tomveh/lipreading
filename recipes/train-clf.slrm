@@ -1,0 +1,31 @@
+#!/bin/bash
+#SBATCH --time=05-00
+#SBATCH --gres=gpu:v100:1
+#SBATCH --cpus-per-task=12
+#SBATCH --mem-per-cpu=4G
+
+source activate lipreading
+
+mkdir /tmp/$SLURM_JOB_ID
+trap "rm -rf /tmp/$SLURM_JOB_ID; exit" TERM EXIT
+
+cd /tmp/$SLURM_JOB_ID
+mkdir lrw1
+cd lrw1
+cp /scratch/elec/puhe/c/LRS3-TED/lrw1/lrw-v1.tar .
+tar xf lrw-v1.tar
+rm lrw-v1.tar
+cd /scratch/work/vehvilt2/lipreading
+
+python src/transformer_classifier.py\
+       --train 0\
+       --frontend resnet\
+       --max_lr 1e-4\
+       --weight_decay 1e-4\
+       --batch_size 64\
+       --data_root "/tmp/$SLURM_JOB_ID/"\
+       --workers 12\
+       --min_epochs 50\
+       --max_epochs 50\
+       --resume_from_checkpoint "/scratch/work/vehvilt2/lipreading/tb_logs/transformer_classifier/version_52851416_max_lr=0.0001_bs=64_description=resnet-test_max_epochs=50_date=May-19-07:17/epoch=31-val_acc=0.81.ckpt"\
+       --description "continue 52851416"

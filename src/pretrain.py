@@ -1,23 +1,25 @@
 import os
-from pathlib import Path
 from argparse import ArgumentParser
+from datetime import datetime
 
 import pytorch_lightning as pl
-from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
-from pytorch_lightning.logging import TestTubeLogger
+import torch
 import torch.nn as nn
 import torch.optim as optim
+from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
+from pytorch_lightning.logging import TensorBoardLogger
 from torch.utils.data import DataLoader
 
 from models.models import PretrainNet
 from utils import data
+from utils.version import version as v
 
 
 class VisualPretrainModule(pl.LightningModule):
     def __init__(self, hparams):
         super().__init__()
         self.hparams = hparams
-        self.model = PretrainNet(resnet=hparams.resnet, nh=hparams.n_hidden)
+        self.model = PretrainNet(resnet=hparams.resnet, nh=512)
         self.criterion = nn.CrossEntropyLoss(reduction='mean')
 
     def forward(self, x):
@@ -34,14 +36,15 @@ class VisualPretrainModule(pl.LightningModule):
         log = {
             'loss/train': loss,
             'accuracy/train': accuracy,
-            'learning_rate': self.trainer.optimizers[0].param_groups[0]['lr']
+            'learning_rate': self.trainer.optimizers[0].param_groups[0]['lr'],
+            'epoch': self.current_epoch
         }
 
         return {'loss': loss, 'log': log}
 
     def configure_optimizers(self):
         opt = optim.AdamW(self.model.parameters(),
-                          lr=0,
+                          lr=self.hparams.learning_rate,
                           weight_decay=self.hparams.weight_decay)
 
         sched = {
@@ -69,15 +72,10 @@ class VisualPretrainModule(pl.LightningModule):
         return {'val_loss': loss, 'val_acc': accuracy}
 
     def validation_epoch_end(self, outputs):
-        val_loss = 0
-        val_acc = 0
-
-        for output in outputs:
-            val_loss += output['val_loss']
-            val_acc += output['val_acc']
-
-        val_loss /= len(outputs)
-        val_acc /= len(outputs)
+        val_loss = torch.tensor([x['val_loss']
+                                 for x in outputs]).sum() / len(outputs)
+        val_acc = torch.tensor([x['val_acc']
+                                for x in outputs]).sum() / len(outputs)
 
         return {
             'val_loss': 1 - val_acc,
@@ -92,89 +90,79 @@ class VisualPretrainModule(pl.LightningModule):
 
         pred = self(x)
 
-        loss = self.criterion(pred, y)
         accuracy = (pred.argmax(dim=1) == y).float().mean()
 
-        return {'test_loss': loss, 'test_acc': accuracy}
+        return {'test_acc': accuracy}
 
     def test_epoch_end(self, outputs):
-        test_loss = 0
-        test_acc = 0
+        test_acc = torch.tensor([x['test_acc']
+                                 for x in outputs]).sum() / len(self.train_ds)
 
-        for output in outputs:
-            test_loss += output['test_loss']
-            test_acc += output['test_acc']
+        return {'log': {'accuracy/test': test_acc}}
 
-        test_loss /= len(outputs)
-        test_acc /= len(outputs)
+    def prepare_data(self):
+        assert self.hparams.dataset in ['lrw1', 'pretrain']
 
-        return {'log': {'loss/test': test_loss, 'accuracy/test': test_acc}}
+        lrw1_root = os.path.join(self.hparams.data_root, 'lrw1')
+
+        if self.hparams.dataset == 'lrw1':
+            self.train_ds = data.LRW1Dataset(root=lrw1_root,
+                                             splits='train',
+                                             transform=data.train_transform())
+            self.val_ds = data.LRW1Dataset(root=lrw1_root,
+                                           splits='val',
+                                           transform=data.val_transform())
+
+        elif self.hparams.dataset == 'pretrain':
+            lrs2_root = os.path.join(self.hparams.data_root, 'lrs2')
+
+            lrw1_train = data.LRW1Dataset(root=lrw1_root,
+                                          splits='train',
+                                          transform=data.train_transform())
+            lrs2_train = data.LRS2PretrainWordDataset(
+                lrs2_root,
+                classes=lrw1_train.classes,
+                transform=data.train_transform())
+
+            self.train_ds = lrw1_train + lrs2_train
+
+            lrw1_val = data.LRW1Dataset(root=lrw1_root,
+                                        splits='val',
+                                        transform=data.val_transform())
+            lrs2_val = data.LRS2PretrainWordDataset(
+                lrs2_root,
+                classes=lrw1_val.classes,
+                transform=data.val_transform())
+
+            self.val_ds = lrw1_val + lrs2_val
+
+        self.test_ds = data.LRW1Dataset(root=lrw1_root,
+                                        splits='test',
+                                        transform=data.val_transform())
 
     def train_dataloader(self):
-        if self.hparams.dataset == 'lrw1':
-            train_ds = data.LRW1Dataset(root=self.hparams.data_root,
-                                        subdir='train',
-                                        transform=data.train_transform())
-        elif self.hparams.dataset == 'pretrain':
-            lrw1 = data.LRW1Dataset(root=os.path.join(self.hparams.data_root,
-                                                      'lrw1'),
-                                    subdir='train',
-                                    transform=data.val_transform())
-            lrs2 = data.LRS2PretrainWordDataset(os.path.join(
-                self.hparams.data_root, 'lrs2'),
-                                                classes=lrw1.classes,
-                                                transform=data.val_transform())
-
-            train_ds = lrw1 + lrs2
-        else:
-            raise RuntimeError('unknown dataset')
-
-        train_dl = DataLoader(train_ds,
-                              batch_size=self.hparams.batch_size,
-                              collate_fn=data.zero_pad,
-                              num_workers=self.hparams.workers,
-                              shuffle=True,
-                              pin_memory=True)
-
-        return train_dl
+        return DataLoader(self.train_ds,
+                          batch_size=self.hparams.batch_size,
+                          collate_fn=data.zero_pad,
+                          num_workers=self.hparams.workers,
+                          shuffle=True,
+                          pin_memory=True)
 
     def val_dataloader(self):
-        if self.hparams.dataset == 'lrw1':
-            root = self.hparams.data_root
-        elif self.hparams.dataset == 'pretrain':
-            root = os.path.join(self.hparams.data_root, 'lrw1')
-
-        val_ds = data.LRW1Dataset(root=root,
-                                  subdir='val',
-                                  transform=data.val_transform())
-
-        val_dl = DataLoader(val_ds,
-                            batch_size=2 * self.hparams.batch_size,
-                            collate_fn=data.zero_pad,
-                            shuffle=False,
-                            pin_memory=True,
-                            num_workers=self.hparams.workers)
-
-        return val_dl
+        return DataLoader(self.val_ds,
+                          batch_size=2 * self.hparams.batch_size,
+                          collate_fn=data.zero_pad,
+                          shuffle=False,
+                          pin_memory=True,
+                          num_workers=self.hparams.workers)
 
     def test_dataloader(self):
-        if self.hparams.dataset == 'lrw1':
-            root = self.hparams.data_root
-        elif self.hparams.dataset == 'pretrain':
-            root = os.path.join(self.hparams.data_root, 'lrw1')
-
-        test_ds = data.LRW1Dataset(root=root,
-                                   subdir='test',
-                                   transform=data.val_transform())
-
-        test_dl = DataLoader(test_ds,
-                             batch_size=2 * self.hparams.batch_size,
-                             collate_fn=data.zero_pad,
-                             shuffle=False,
-                             pin_memory=True,
-                             num_workers=self.hparams.workers)
-
-        return test_dl
+        return DataLoader(self.test_ds,
+                          batch_size=2 * self.hparams.batch_size,
+                          collate_fn=data.zero_pad,
+                          shuffle=False,
+                          pin_memory=True,
+                          num_workers=self.hparams.workers)
 
     @staticmethod
     def add_model_specific_args(parent_parser):
@@ -182,7 +170,6 @@ class VisualPretrainModule(pl.LightningModule):
 
         # model
         parser.add_argument('--resnet', type=str)
-        parser.add_argument('--n_hidden', type=int, default=512)
         parser.add_argument('--learning_rate', default=3e-4, type=float)
         parser.add_argument('--weight_decay', default=1e-3, type=float)
         parser.add_argument('--batch_size', default=64, type=int)
@@ -197,17 +184,27 @@ class VisualPretrainModule(pl.LightningModule):
         return parser
 
 
-def main(hparams):
+def main(hparams, version_hparams):
+    print(hparams)
+
     module = VisualPretrainModule(hparams)
 
-    logger = TestTubeLogger(save_dir='tt_logs',
-                            name='pretrain',
-                            description=hparams.description)
+    logger = TensorBoardLogger(save_dir='tb_logs',
+                               name='pretrain',
+                               version=v(version_hparams, hparams))
+
+    logger.log_hyperparams(hparams)
+
+    ckpt_path = os.path.join(logger.save_dir, logger.name, logger.version,
+                             '{epoch}-{val_loss:.2f}.ckpt')
+    checkpoint_callback = ModelCheckpoint(ckpt_path,
+                                          monitor='val_loss',
+                                          verbose=True)
 
     trainer = pl.Trainer(logger=logger,
+                         progress_bar_refresh_rate=100,
                          early_stop_callback=False,
-                         checkpoint_callback=True,
-                         show_progress_bar=True,
+                         checkpoint_callback=checkpoint_callback,
                          gpus=1,
                          log_gpu_memory='all',
                          min_epochs=hparams.epochs,
@@ -222,7 +219,6 @@ if __name__ == '__main__':
     parser = ArgumentParser(add_help=False)
     parser.add_argument('--track_grad_norm', type=int, default=-1)
     parser.add_argument('--description', type=str, default='')
-    parser.add_argument('--fast_dev_run', default=0, type=int)
     parser.add_argument('--weight_hist', default=0, type=int)
     parser.add_argument('--epochs', default=10, type=int)
     parser.add_argument('--checkpoint', type=str, default='')
@@ -230,4 +226,8 @@ if __name__ == '__main__':
 
     hparams = parser.parse_args()
 
-    main(hparams)
+    # list of tuples (display_name, hparam_key, process_fn)
+    version_hparams = [('lr', 'learning_rate'), ('bs', 'batch_size'),
+                       ('ds', 'dataset'), ('description', None)]
+
+    main(hparams, version_hparams)

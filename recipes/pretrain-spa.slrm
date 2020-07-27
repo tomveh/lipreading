@@ -1,0 +1,23 @@
+#!/bin/bash -l
+#SBATCH -p dgx-spa
+#SBATCH --time=03-00
+#SBATCH --gres=gpu:v100:1
+#SBATCH --cpus-per-task=12
+#SBATCH --mem-per-cpu=4G
+#SBATCH --export=HOME,USER,TEAM,WRKDIR
+
+source activate lipreading
+
+srun --gres=gpu:1 python src/pretrain.py\
+       --resnet 3d\
+       --dataset lrw1\
+       --learning_rate 1e-3\
+       --weight_decay 1e-3\
+       --batch_size 64\
+       --data_root "/scratch/elec/puhe/c/LRS3-TED/lrw1"\
+       --workers 12\
+       --weight_hist 0\
+       --epochs 10\
+       --description "test pretraining with 3d frontend"\
+       --fast_dev_run 0
+

@@ -15,15 +15,21 @@ class ResNet(nn.Module):
     def __init__(self, num_blocks, block_sizes=[64, 128, 256, 512]):
         super().__init__()
 
-        channels = enumerate(zip(block_sizes[:-1], block_sizes[1:]))
+        self.model = nn.Sequential(
+            ResidualLayer(64, 64, num_blocks[0], preactivation=False),
+            ResidualLayer(64, 128, num_blocks[1], preactivation=True),
+            ResidualLayer(128, 256, num_blocks[2], preactivation=True),
+            ResidualLayer(256, 512, num_blocks[3], preactivation=True))
 
-        self.model = nn.Sequential(*[
-            ResidualLayer(in_channels,
-                          out_channels,
-                          blocks=num_blocks[i],
-                          preactivation=(i > 0))
-            for i, (in_channels, out_channels) in channels
-        ])
+        # channels = enumerate(zip(block_sizes[:-1], block_sizes[1:]))
+
+        # self.model = nn.Sequential(*[
+        #     ResidualLayer(in_channels,
+        #                   out_channels,
+        #                   blocks=num_blocks[i],
+        #                   preactivation=(i > 0))
+        #     for i, (in_channels, out_channels) in channels
+        # ])
 
     def forward(self, x):
         return self.model(x)
@@ -35,11 +41,12 @@ class ResidualLayer(nn.Module):
         self.model = nn.Sequential(
             ResidualBlock(in_channels,
                           out_channels,
-                          preactivation=preactivation),
-            *[
-                ResidualBlock(out_channels, out_channels, preactivation=True)
-                for _ in range(blocks - 1)
-            ])
+                          preactivation=preactivation), *[
+                              ResidualBlock(out_channels,
+                                            out_channels,
+                                            preactivation=True)
+                              for _ in range(blocks - 1)
+                          ])
 
     def forward(self, x):
         return self.model(x)

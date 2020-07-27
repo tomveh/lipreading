@@ -1,0 +1,33 @@
+#!/bin/bash -l
+#SBATCH -p dgx-spa
+#SBATCH --time=05-00
+#SBATCH --gres=gpu:v100:1
+#SBATCH --cpus-per-task=10
+#SBATCH --mem-per-cpu=4G
+#SBATCH --export=HOME,USER,TEAM,WRKDIR
+
+source activate lipreading
+
+mkdir /tmp/$SLURM_JOB_ID
+trap "rm -rf /tmp/$SLURM_JOB_ID; exit" TERM EXIT
+
+cd /tmp/$SLURM_JOB_ID
+mkdir lrw1
+cd lrw1
+cp /scratch/elec/puhe/c/LRS3-TED/lrw1/lrw-v1.tar .
+tar xf lrw-v1.tar
+rm lrw-v1.tar
+
+cd /scratch/work/vehvilt2/lipreading
+
+python src/transformer_classifier.py\
+       --train 0\
+       --frontend resnet\
+       --max_lr 1e-4\
+       --weight_decay 1e-4\
+       --batch_size 64\
+       --data_root "/tmp/$SLURM_JOB_ID/"\
+       --workers 12\
+       --min_epochs 50\
+       --max_epochs 50\
+       --description "resnet test (resnet)"
