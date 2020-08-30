@@ -7,7 +7,7 @@ import tqdm
 from torch.utils.data import DataLoader, Dataset
 
 import utils.data as data
-from models.frontend import VisualFrontend
+from models.frontend import ResnetFrontend
 from pretrain import VisualPretrainModule
 
 

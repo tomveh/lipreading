@@ -14,7 +14,8 @@ from torch.utils.data import DataLoader, random_split
 
 from jiwer import wer
 from models.models import TransformerModel
-from utils import callbacks, data2
+from utils import callbacks, data3
+import tokenizers
 from utils.version import version as v
 
 
@@ -22,11 +23,9 @@ class EndToEndTrainModule(pl.LightningModule):
     def __init__(self, hparams):
         super().__init__()
         self.hparams = hparams
-
-        # self.vocab = data.CharVocab()
-        self.vocab = data2.SubwordVocab()
+        self.tokenizer = tokenizers.Tokenizer.from_file(hparams.tokenizer)
         self.loss_fn = nn.CrossEntropyLoss(
-            reduction='mean', ignore_index=self.vocab.token2idx('<pad>'))
+            reduction='mean', ignore_index=self.tokenizer.token_to_id('<pad>'))
         self.model = TransformerModel(self.vocab, 'resnet18')
 
         # set batch size as attribute so it can changed later
@@ -36,13 +35,13 @@ class EndToEndTrainModule(pl.LightningModule):
         return self.model(*args, **kwargs)
 
     def prepare_data(self):
-        ds = data2.LRS2PretrainDataset(
+        ds = data3.LRS2PretrainDataset(
             os.path.join(self.hparams.data_root, 'lrs2'),
             self.vocab,
-            transform=data2.train_transform()) + data2.LRS3PretrainDataset(
+            transform=data3.train_transform()) + data3.LRS3PretrainDataset(
                 os.path.join(self.hparams.data_root, 'lrs3'),
                 self.vocab,
-                transform=data2.train_transform())
+                transform=data3.train_transform())
 
         self.train_ds, self.val_ds = random_split(
             ds, [int(0.9 * len(ds)),
@@ -140,8 +139,8 @@ class EndToEndTrainModule(pl.LightningModule):
     def train_dataloader(self):
         return DataLoader(self.train_ds,
                           batch_size=self.batch_size,
-                          collate_fn=lambda x: data2.pad_collate(
-                              x, padding_value=self.vocab.token2idx('<pad>')),
+                          collate_fn=lambda x: data3.pad_collate(
+                              x, tokenizer=self.tokenizer),
                           num_workers=self.hparams.workers,
                           shuffle=True,
                           pin_memory=True)
@@ -149,8 +148,8 @@ class EndToEndTrainModule(pl.LightningModule):
     def val_dataloader(self):
         return DataLoader(self.val_ds,
                           batch_size=self.batch_size,
-                          collate_fn=lambda x: data2.pad_collate(
-                              x, padding_value=self.vocab.token2idx('<pad>')),
+                          collate_fn=lambda x: data3.pad_collate(
+                              x, tokenizer=self.tokenizer),
                           num_workers=self.hparams.workers,
                           shuffle=True,
                           pin_memory=True)
@@ -163,6 +162,7 @@ class EndToEndTrainModule(pl.LightningModule):
         parser.add_argument('--learning_rate', default=5e-5, type=float)
         parser.add_argument('--weight_decay', default=1e-4, type=float)
         parser.add_argument('--batch_size', default=64, type=int)
+        parser.add_argument('--tokenizer', type=str)
 
         # data
         parser.add_argument('--data_root', type=str)

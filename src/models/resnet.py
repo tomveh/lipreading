@@ -12,7 +12,7 @@ def resnet34():
 
 # note that there is no bottleneck so this only works for resnet18 and resnet34
 class ResNet(nn.Module):
-    def __init__(self, num_blocks, block_sizes=[64, 128, 256, 512]):
+    def __init__(self, num_blocks):
         super().__init__()
 
         self.model = nn.Sequential(
@@ -20,16 +20,6 @@ class ResNet(nn.Module):
             ResidualLayer(64, 128, num_blocks[1], preactivation=True),
             ResidualLayer(128, 256, num_blocks[2], preactivation=True),
             ResidualLayer(256, 512, num_blocks[3], preactivation=True))
-
-        # channels = enumerate(zip(block_sizes[:-1], block_sizes[1:]))
-
-        # self.model = nn.Sequential(*[
-        #     ResidualLayer(in_channels,
-        #                   out_channels,
-        #                   blocks=num_blocks[i],
-        #                   preactivation=(i > 0))
-        #     for i, (in_channels, out_channels) in channels
-        # ])
 
     def forward(self, x):
         return self.model(x)

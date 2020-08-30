@@ -10,7 +10,7 @@ from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
 from pytorch_lightning.logging import TensorBoardLogger
 from torch.utils.data import DataLoader
 
-from models.models import PretrainNet
+from models.models import PretrainClassifier
 from utils import data
 from utils.version import version as v
 
@@ -19,7 +19,7 @@ class VisualPretrainModule(pl.LightningModule):
     def __init__(self, hparams):
         super().__init__()
         self.hparams = hparams
-        self.model = PretrainNet(resnet=hparams.resnet, nh=512)
+        self.model = PretrainClassifier()
         self.criterion = nn.CrossEntropyLoss(reduction='mean')
 
     def forward(self, x):
@@ -169,7 +169,6 @@ class VisualPretrainModule(pl.LightningModule):
         parser = ArgumentParser(parents=[parent_parser])
 
         # model
-        parser.add_argument('--resnet', type=str)
         parser.add_argument('--learning_rate', default=3e-4, type=float)
         parser.add_argument('--weight_decay', default=1e-3, type=float)
         parser.add_argument('--batch_size', default=64, type=int)

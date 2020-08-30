@@ -48,12 +48,12 @@ class ConvolutionalBackend(nn.Module):
 
 
 class TransformerBackend(nn.Module):
-    def __init__(self, vocab):
+    def __init__(self, tokenizer):
         super().__init__()
-        self.vocab = vocab
-        self.embedding = nn.Embedding(vocab.n_embed, 512)
+        self.tokenizer = tokenizer
+        self.embedding = nn.Embedding(tokenizer.get_vocab_size(), 512)
         self.transformer = nn.Transformer(d_model=512)
-        self.linear = nn.Linear(512, vocab.n_output)
+        self.linear = nn.Linear(512, tokenizer.n_output)
         self._init_weights()
 
     def _init_weights(self):
@@ -75,7 +75,7 @@ class TransformerBackend(nn.Module):
                 len(tgt)).type_as(tgt)
 
             src_key_padding_mask = x.sum(dim=2) == 0
-            tgt_key_padding_mask = y == self.vocab.token2idx('<pad>')
+            tgt_key_padding_mask = y == self.tokenizer.token_to_id('<pad>')
 
             out = self.transformer(src,
                                    tgt,

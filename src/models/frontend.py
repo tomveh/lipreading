@@ -1,24 +1,8 @@
 import torch.nn as nn
-
 from .resnet import resnet18
 
-# class SpatioTempralFrontend(nn.Module):
-#     def __init__(self):
-#         super().__init__()
-#         self.conv1 = nn.Sequential(
-#             nn.Conv3d(1,
-#                       64,
-#                       kernel_size=(5, 7, 7),
-#                       stride=(1, 2, 2),
-#                       padding=(2, 3, 3),
-#                       bias=False), nn.BatchNorm3d(64), nn.ReLU(inplace=True),
-#             nn.Dropout3d(p=0.1, inplace=True),
-#             nn.MaxPool3d(kernel_size=(1, 3, 3),
-#                          stride=(1, 2, 2),
-#                          padding=(0, 1, 1)))
 
-
-class VisualFrontend(nn.Module):
+class ResnetFrontend(nn.Module):
     def __init__(self):
         super().__init__()
         self.conv3d = nn.Sequential(
@@ -82,7 +66,6 @@ class SpatioTemporalFrontend(nn.Module):
             nn.Conv3d(512, 512, kernel_size=(1, 3, 3), stride=1),
             nn.BatchNorm3d(512),
             nn.ReLU(inplace=True),
-            # nn.MaxPool3d(kernel_size=(1, 2, 2), stride=1)
         )
 
     def forward(self, x):

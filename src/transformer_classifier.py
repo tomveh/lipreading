@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch.optim as optim
 from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
 from pytorch_lightning.logging import TensorBoardLogger
+from pytorch_lightning.profiler import AdvancedProfiler
 from torch.utils.data import DataLoader
 
 from models.models import TransformerClassifier
@@ -182,7 +183,7 @@ def main(hparams, version_hparams):
     print('hparams', hparams)
     module = TransformerClassifierModule(hparams)
 
-    logger = TensorBoardLogger(save_dir='tb_logs',
+    logger = TensorBoardLogger(save_dir='new_logs',
                                name='transformer_classifier',
                                version=v(version_hparams, hparams))
 
@@ -197,11 +198,12 @@ def main(hparams, version_hparams):
                                           verbose=True)
 
     trainer = pl.Trainer(logger=logger,
-                         amp_level='O2',
-                         precision=16,
+                         # profiler=AdvancedProfiler(),
+                         # amp_level='O2',
+                         # precision=16,
                          early_stop_callback=False,
                          checkpoint_callback=checkpoint_callback,
-                         progress_bar_refresh_rate=1000,
+                         progress_bar_refresh_rate=100,
                          gpus=1,
                          log_gpu_memory='all',
                          min_epochs=hparams.min_epochs,
